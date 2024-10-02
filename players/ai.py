@@ -323,6 +323,7 @@ class AIPlayer:
         is_virtual = False
         blocks_virtual = False
         if is_expansion:
+            # Making virtual Connections: ___________________________________________________________
             biased_moves = set()
             temp_player_dsu = self.dsus.player_dsu.copy()
             temp_opponent_dsu = self.dsus.opponent_dsu.copy()
@@ -339,7 +340,7 @@ class AIPlayer:
                 heuristic_value += 20
                 blocks_virtual = True
 
-            # check frame for corners: 
+            # Pursuing depth 1 virtual connections:_____________________________________________________
             for index in new_player_sets:
                 corner_count = 0
                 for node in new_player_sets[index]:
@@ -353,7 +354,6 @@ class AIPlayer:
                         biased_moves.add(node)
                 break
             #check frame for edges:
-            # print("new player sets: ", new_player_sets)
             for index in new_player_sets: 
                 edge_count = 0
                 seen_edges = set()
@@ -372,7 +372,39 @@ class AIPlayer:
 
             if move in biased_moves:
                 heuristic_value += 10000
-                
+            
+            # Preventing depth 1 virtual connections:_____________________________________________________
+            temp_state = np.copy(state)
+            temp_state[move[0], move[1]] = 2
+            temp_player_dsu = self.dsus.player_dsu.copy()
+            temp_opponent_dsu = self.dsus.opponent_dsu.copy()
+            temp_opponent_dsu.insert_node(move, self.map_v_pairs, temp_state)
+            temp_player_dsu.recheck_nodes(move, self.inverse_map_v_pairs, self.map_v_pairs, temp_state)
+            new_opponent_sets = temp_opponent_dsu.get_sets()
+
+            for index in new_opponent_sets:
+                corner_count = 0
+                for node in new_opponent_sets[index]:
+                    if node in self.corners:
+                        corner_count += 1
+                if corner_count >= 2:
+                    heuristic_value += 100
+                    print("Preventing W by corners....")
+                break
+            #check frame for edges:
+            for index in new_opponent_sets:
+                edge_count = 0
+                seen_edges = set()
+                for node in new_opponent_sets[index]:
+                    node_edge = get_edge(node, self.dimension)
+                    if node in self.edges and node_edge not in seen_edges:
+                        edge_count += 1
+                        seen_edges.add(node_edge)
+                if edge_count >= 3:
+                    heuristic_value += 100
+                    print("Preventing W by edges....")
+                break
+
 
         dim = (state.shape[0] + 1) // 2
         if move in self.edges:
