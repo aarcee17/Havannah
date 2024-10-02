@@ -47,13 +47,13 @@ class DSU:
 
 
     def check_v_pairs(self, v_new, v_pair, v_n1, v_n2, state):
-        print("checking v pairs: ", v_new, v_pair, v_n1, v_n2)
+        # print("checking v pairs: ", v_new, v_pair, v_n1, v_n2)
         if state[v_new] == state[v_pair] and state[v_n1] == 0 and state[v_n2] == 0:
             return True
         return False 
 
     def insert_node(self, v_new, map_v_pairs, state):
-        print("inserting node: ", v_new)
+        # print("inserting node: ", v_new)
         self.find(v_new)
         flag_for_virtual_cc = False
         for v in map_v_pairs.get(v_new, []):
@@ -67,7 +67,7 @@ class DSU:
         return flag_for_virtual_cc
 
     def re_evaluate(self, u, v, state, map_v_pairs):
-        print("re-evaluating: ", u, v)
+        # print("re-evaluating: ", u, v)
         sets = self.get_sets()
         component = sets[self.find(u)]
         for node in component:
@@ -78,7 +78,7 @@ class DSU:
 
         
     def recheck_nodes(self, move, inverse_map_v_pair, map_v_pairs, state): 
-        print("rechecking nodes: ", move)
+        # print("rechecking nodes: ", move)
         for (u,v) in inverse_map_v_pair.get(move, []):
             if self.connected(u, v):
                 print("connected: ", u, v)
@@ -114,9 +114,16 @@ class AIPlayer:
         self.dimension = 0
         self.last_state = None
         self.last_opp_move = None
+        self.edges = {}
+        self.corners = set()
 
     def get_move(self, state: np.array) -> Tuple[int, int]:
         if self.first_run: 
+            self.corners = set(get_all_corners(len(state)))
+            sides = get_all_edges(len(state))
+            for i, side in enumerate(sides):
+                for coord in side:
+                    self.edges[coord] = i + 1
             self.dimension = len(state)
             self.dsus.player_dsu.dimension = self.dimension
             self.dsus.opponent_dsu.dimension = self.dimension
@@ -316,6 +323,7 @@ class AIPlayer:
         is_virtual = False
         blocks_virtual = False
         if is_expansion:
+            biased_moves = set()
             temp_player_dsu = self.dsus.player_dsu.copy()
             temp_opponent_dsu = self.dsus.opponent_dsu.copy()
             prev_player_sets = temp_player_dsu.get_sets()
@@ -330,14 +338,47 @@ class AIPlayer:
             if len(prev_opponent_sets) < len(new_opponent_sets):
                 heuristic_value += 20
                 blocks_virtual = True
-        
-        
+
+            # check frame for corners: 
+            for index in new_player_sets:
+                corner_count = 0
+                for node in new_player_sets[index]:
+                    # print("node haiss: ", node)
+                    if node in self.corners:
+                        corner_count += 1
+                if corner_count >= 2:
+                    heuristic_value += 100
+                    print("Supreme W by corners....")
+                    for node in new_player_sets[index]:
+                        biased_moves.add(node)
+                break
+            #check frame for edges:
+            # print("new player sets: ", new_player_sets)
+            for index in new_player_sets: 
+                edge_count = 0
+                seen_edges = set()
+                for node in new_player_sets[index]:
+                    # print("node hai: ", node)
+                    node_edge = get_edge(node, self.dimension)
+                    if node in self.edges and node_edge not in seen_edges:
+                        edge_count += 1
+                        seen_edges.add(node_edge)
+                if edge_count >= 3:
+                    heuristic_value += 100
+                    print("Supreme W by edges....")
+                    for node in new_player_sets[index]:
+                        biased_moves.add(node)
+                break
+
+            if move in biased_moves:
+                heuristic_value += 10000
+                
 
         dim = (state.shape[0] + 1) // 2
-        if self.is_edge(move, dim):
-            heuristic_value += 2  # Bonus for being on an edge
-        if self.is_corner(move, dim):
-            heuristic_value += 2  # Bonus for being on a corner
+        if move in self.edges:
+            heuristic_value += 2
+        if move in self.corners: 
+            heuristic_value += 2
 
         # Heuristic 3: Group Size (approximate)
         # Bonus for connecting to own stones
@@ -348,14 +389,6 @@ class AIPlayer:
 
 
         return heuristic_value
-
-    def is_edge(self, pos, dim):
-        # Return True if position is on an edge (but not a corner)
-        edge = get_edge(pos, dim)
-        if edge != -1 and not self.is_corner(pos, dim):
-            return True
-        else:
-            return False
 
     def is_corner(self, pos, dim):
         corner = get_corner(pos, dim)
