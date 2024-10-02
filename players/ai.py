@@ -236,7 +236,7 @@ class AIPlayer:
         if not root.children:
             self.expand_node(root, self.player_number)
 
-        simulations = 500
+        simulations = 1000
         for _ in range(simulations):
             node, state_copy = self.select_node(root)
             reward = self.rollout(state_copy)
