@@ -167,7 +167,7 @@ class AIPlayer:
             if check_win(temp_state, move, self.player_number)[0]:
                 print(f"AI selects winning move: {move}")
                 returning_chores(move, state)
-                return move
+                return (int(move[0]), int(move[1]))
 
         # Check if opponent can win with the next move and block it
         opponent_number = 2 if self.player_number == 1 else 1
@@ -177,14 +177,14 @@ class AIPlayer:
             if check_win(temp_state, move, opponent_number)[0]:
                 print(f"AI blocks opponent's winning move: {move}")
                 returning_chores(move, state)
-                return move
+                return (int(move[0]), int(move[1]))
 
         # Look for 3-move combinations to block or win
         # combo_move = self.lookahead_checkmate(state, valid_moves)
         # if combo_move:
         #     print(f"AI selects strategic move: {combo_move}")
         #     returning_chores(combo_move, state)
-        #     return combo_move
+        #     return (int(combo_move[0]), int(combo_move[1]))
 
         # Fallback to MCTS RAVE with heuristics if no immediate threats or wins are detected
         current_turn = np.count_nonzero(state)
@@ -192,13 +192,13 @@ class AIPlayer:
         if mcts_move in valid_moves:
             print(f"AI selects MCTS move: {mcts_move}")
             returning_chores(mcts_move, state)
-            return mcts_move
+            return (int(mcts_move[0]), int(mcts_move[1]))
         else:
             # As a safety net, return a random valid move
             safe_move = random.choice(valid_moves)
             print(f"AI selects fallback move: {safe_move}")
             returning_chores(safe_move, state)
-            return safe_move
+            return (int(safe_move[0]), int(safe_move[1]))
 
     def lookahead_checkmate(self, state: np.array, valid_moves: list) -> Tuple[int, int]:
         opponent_number = 2 if self.player_number == 1 else 1
