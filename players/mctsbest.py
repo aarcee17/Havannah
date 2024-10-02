@@ -180,7 +180,7 @@ class AIPlayer:
             distances = np.abs(own_stones - move).sum(axis=1)
             min_distance = np.min(distances)
             if min_distance == 1:
-                heuristic_value += 2  # Direct neighbor
+                heuristic_value += 3  # Direct neighbor
             elif min_distance == 2:
                 heuristic_value += 2  # Virtual connection
             elif min_distance == 3:
@@ -192,7 +192,7 @@ class AIPlayer:
         if self.is_edge(move, dim):
             heuristic_value += 2  # Bonus for being on an edge
         if self.is_corner(move, dim):
-            heuristic_value += 2  # Bonus for being on a corner
+            heuristic_value += 3  # Bonus for being on a corner
 
         # Heuristic 3: Group Size (approximate)
         # Bonus for connecting to own stones

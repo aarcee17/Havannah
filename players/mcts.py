@@ -1,17 +1,16 @@
 import random
 import numpy as np
 from typing import Tuple
-from helper import get_valid_actions, check_win, get_neighbours, get_all_edges, get_all_corners, get_edge, get_corner
+from helper import get_valid_actions, check_win
 
 class AIPlayer:
     
-    def __init__(self, player_number: int, timer, max_depth: int = 3, heuristic_weight=0.5):
+    def __init__(self, player_number: int, timer, max_depth: int = 3):
         self.player_number = player_number
         self.type = 'ai2'
         self.player_string = f'Player {player_number}: ai2'
         self.timer = timer
         self.max_depth = max_depth
-        self.heuristic_weight = heuristic_weight  # Weight for heuristic bias in UCB
 
     def get_move(self, state: np.array) -> Tuple[int, int]:
         valid_moves = get_valid_actions(state)
@@ -39,7 +38,7 @@ class AIPlayer:
             print(f"AI selects strategic move: {combo_move}")
             return combo_move
 
-        # Fallback to MCTS RAVE with heuristics if no immediate threats or wins are detected
+        # Fallback to MCTS RAVE if no immediate threats or wins are detected
         current_turn = np.count_nonzero(state)
         mcts_move = self.mcts_rave(state, valid_moves, current_turn)
         if mcts_move in valid_moves:
@@ -104,8 +103,7 @@ class AIPlayer:
         while node.children:
             node = self.ucb_select(node)
             # Apply the move to the state copy
-            if node.move is not None:
-                state_copy[node.move[0], node.move[1]] = node.player
+            state_copy[node.move[0], node.move[1]] = node.player
         return node, state_copy
 
     def expand_node(self, node, player_number):
@@ -114,19 +112,15 @@ class AIPlayer:
         for move in valid_moves:
             temp_state = np.copy(node.state)
             temp_state[move[0], move[1]] = player_number
-            heuristic_value = self.evaluate_move_heuristic(temp_state, move, player_number)
-            child_node = self.MCTSNode(temp_state, move, parent=node, player=opponent_number, heuristic_value=heuristic_value)
+            child_node = self.MCTSNode(temp_state, move, parent=node, player=opponent_number)
             node.children.append(child_node)
 
     def ucb_select(self, node):
-        total_visits = sum(child.visits for child in node.children) + 1
-        ucb_values = []
-        for child in node.children:
-            exploitation = (child.value / (child.visits + 1e-5))
-            exploration = 2 * np.sqrt(np.log(total_visits) / (child.visits + 1e-5))
-            heuristic_bias = (child.heuristic_value * self.heuristic_weight) / (child.visits + 1)
-            ucb_value = exploitation + exploration + heuristic_bias
-            ucb_values.append(ucb_value)
+        total_visits = sum(child.visits for child in node.children)
+        ucb_values = [
+            (child.value / (child.visits + 1e-5)) + 2 * np.sqrt(np.log(total_visits + 1) / (child.visits + 1e-5))
+            for child in node.children
+        ]
         max_index = np.argmax(ucb_values)
         return node.children[max_index]
 
@@ -139,22 +133,7 @@ class AIPlayer:
             valid_moves = get_valid_actions(state_copy)
             if not valid_moves:
                 break
-
-            # Heuristic rollout policy
-            moves_with_heuristics = []
-            for move in valid_moves:
-                heuristic_value = self.evaluate_move_heuristic(state_copy, move, current_player)
-                moves_with_heuristics.append((move, heuristic_value))
-
-            # Select move with highest heuristic value
-            if moves_with_heuristics:
-                moves_with_heuristics.sort(key=lambda x: x[1], reverse=True)
-                # Optionally, select among top few moves randomly
-                top_moves = [m for m in moves_with_heuristics if m[1] == moves_with_heuristics[0][1]]
-                move = random.choice(top_moves)[0]
-            else:
-                move = random.choice(valid_moves)
-
+            move = random.choice(valid_moves)
             state_copy[move[0], move[1]] = current_player
             if check_win(state_copy, move, current_player)[0]:
                 return 1.0 if current_player == self.player_number else 0.0
@@ -171,54 +150,8 @@ class AIPlayer:
                 node.value += (1 - reward)
             node = node.parent
 
-    def evaluate_move_heuristic(self, state, move, player_number):
-        heuristic_value = 0
-
-        # Heuristic 1: Locality (playing near own stones)
-        own_stones = np.argwhere(state == player_number)
-        if own_stones.size > 0:
-            distances = np.abs(own_stones - move).sum(axis=1)
-            min_distance = np.min(distances)
-            if min_distance == 1:
-                heuristic_value += 2  # Direct neighbor
-            elif min_distance == 2:
-                heuristic_value += 2  # Virtual connection
-            elif min_distance == 3:
-                heuristic_value += 1  # Distance 2 but not VC
-
-        # Heuristic 2: Edge Connectivity
-        # Check if move is on an edge or corner
-        dim = (state.shape[0] + 1) // 2
-        if self.is_edge(move, dim):
-            heuristic_value += 2  # Bonus for being on an edge
-        if self.is_corner(move, dim):
-            heuristic_value += 2  # Bonus for being on a corner
-
-        # Heuristic 3: Group Size (approximate)
-        # Bonus for connecting to own stones
-        neighbors = self.get_neighbors(move, dim)
-        own_neighbors = [n for n in neighbors if state[n[0], n[1]] == player_number]
-        heuristic_value += len(own_neighbors)  # Bonus for each own neighbor
-
-        return heuristic_value
-
-    def is_edge(self, pos, dim):
-        # Return True if position is on an edge (but not a corner)
-        edge = get_edge(pos, dim)
-        if edge != -1 and not self.is_corner(pos, dim):
-            return True
-        else:
-            return False
-
-    def is_corner(self, pos, dim):
-        corner = get_corner(pos, dim)
-        return corner != -1
-
-    def get_neighbors(self, pos, dim):
-        return get_neighbours(dim, pos)
-
     class MCTSNode:
-        def __init__(self, state, move, parent=None, player=1, heuristic_value=0):
+        def __init__(self, state, move, parent=None, player=1):
             self.state = state
             self.move = move
             self.parent = parent
@@ -226,4 +159,3 @@ class AIPlayer:
             self.visits = 0
             self.value = 0.0
             self.player = player  # The player who made the move to reach this state
-            self.heuristic_value = heuristic_value  # The heuristic value for this node
