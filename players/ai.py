@@ -116,6 +116,7 @@ class AIPlayer:
         self.last_opp_move = None
         self.edges = {}
         self.corners = set()
+        self.bias_vector  = []
 
     def get_move(self, state: np.array) -> Tuple[int, int]:
         if self.first_run: 
@@ -127,6 +128,8 @@ class AIPlayer:
             self.dimension = len(state)
             self.dsus.player_dsu.dimension = self.dimension
             self.dsus.opponent_dsu.dimension = self.dimension
+            self.bias_vector = np.ones((self.dimension, self.dimension))
+            self.reset_bias_vector(state)
             for r in range(len(state)):
                 for c in range(len(state)):
                     if state[r,c] != 3:
@@ -337,40 +340,49 @@ class AIPlayer:
                 heuristic_value += 10
                 is_virtual = True
             if len(prev_opponent_sets) < len(new_opponent_sets):
-                heuristic_value += 20
+                heuristic_value += 10
                 blocks_virtual = True
 
             # Pursuing depth 1 virtual connections:_____________________________________________________
             for index in new_player_sets:
                 corner_count = 0
+                anchor_points = set()
                 for node in new_player_sets[index]:
                     # print("node haiss: ", node)
                     if node in self.corners:
                         corner_count += 1
+                        anchor_points.add(node)
                 if corner_count >= 2:
                     heuristic_value += 100
                     print("Supreme W by corners....")
-                    for node in new_player_sets[index]:
-                        biased_moves.add(node)
-                break
+                    for node in anchor_points:
+                        for n in get_neighbours(self.dimension, node):
+                            if state[n[0], n[1]] == 0:
+                                biased_moves.add(n)
+                    break
             #check frame for edges:
             for index in new_player_sets: 
                 edge_count = 0
                 seen_edges = set()
+                anchor_points = set()
                 for node in new_player_sets[index]:
                     # print("node hai: ", node)
                     node_edge = get_edge(node, self.dimension)
                     if node in self.edges and node_edge not in seen_edges:
                         edge_count += 1
+                        anchor_points.add(node)
                         seen_edges.add(node_edge)
                 if edge_count >= 3:
                     heuristic_value += 100
                     print("Supreme W by edges....")
-                    for node in new_player_sets[index]:
-                        biased_moves.add(node)
-                break
+                    for node in anchor_points: 
+                        for n in get_neighbours(self.dimension, node):
+                            if state[n[0], n[1]] == 0:
+                                biased_moves.add(n)
+                    break
 
             if move in biased_moves:
+                print("Pursued Biased moves....")
                 heuristic_value += 10000
             
             # Preventing depth 1 virtual connections:_____________________________________________________
@@ -405,8 +417,11 @@ class AIPlayer:
                     print("Preventing W by edges....")
                 break
 
-
+        
+        #Biasing towards the corner: 
+        heuristic_value -= 2*(self.bias_vector[move[0]][move[1]])
         dim = (state.shape[0] + 1) // 2
+
         if move in self.edges:
             heuristic_value += 2
         if move in self.corners: 
@@ -417,14 +432,32 @@ class AIPlayer:
         neighbors = get_neighbours(dim, move)
         own_neighbors = [n for n in neighbors if state[n[0], n[1]] == player_number]
         heuristic_value += len(own_neighbors)  # Bonus for each own neighbor
-
-
-
         return heuristic_value
+    #___________________________________________________________________________________________
+    def set_anchor_point(self, anchor, factor=0.97):
+        self.bias_vector[anchor] = 1
+        frontier = set()
+        frontier.add(anchor)
+        new_frontier = set()
+        while frontier:
+            for node in frontier:
+                for n in get_neighbours(self.dimension, node):
+                    if self.bias_vector[n] == 0:
+                        self.bias_vector[n] = 1*factor
+                        new_frontier.add(n)
+            frontier = new_frontier
+            factor *= factor
 
-    def is_corner(self, pos, dim):
-        corner = get_corner(pos, dim)
-        return corner != -1
+    def reset_bias_vector(self, state, factor=0.97):
+        self.bias_vector = np.ones((self.dimension, self.dimension))
+        for r in range(self.dimension):
+            for c in range(self.dimension):
+                if state is not None and state[r, c] != 3:
+                    for corner in self.corners:
+                        distance = abs(r - corner[0]) + abs(c - corner[1])
+                        self.bias_vector[r, c] = min((float(distance)  / self.dimension), self.bias_vector[r, c])
+        print("Bias Vector has been reset")
+        print(self.bias_vector)
 
     def get_v_pairs(self, state, vertex):
         i,j = vertex
