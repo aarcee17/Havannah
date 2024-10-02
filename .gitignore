@@ -4,3 +4,4 @@ __pycache__/
 
 # Ignore __pycache__ in the players directory
 players/__pycache__/
+logs.txt
