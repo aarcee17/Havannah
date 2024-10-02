@@ -1,384 +1,614 @@
 import random
 import numpy as np
 from typing import Tuple
-from helper import get_valid_actions, check_win
+from helper import (
+    get_valid_actions,
+    check_win,
+    get_neighbours,
+    get_all_edges,
+    get_all_corners,
+    get_edge,
+    get_corner,
+    fetch_remaining_time,
+)
+import time
+from collections import deque
 
 class AIPlayer:
-    
-    def __init__(self, player_number: int, timer):
-        """
-        Initialize the AIPlayer Agent.
-        
-        Parameters:
-        - player_number (int): Current player number (1 or 2)
-        - timer: A Timer object to fetch remaining time
-        """
+    def __init__(self, player_number: int, timer, max_depth: int = 3, heuristic_weight=0.5):
         self.player_number = player_number
         self.type = 'ai2'
         self.player_string = f'Player {player_number}: ai2'
         self.timer = timer
+        self.max_depth = max_depth
+        self.heuristic_weight = heuristic_weight  # Weight for heuristic bias in UCB
+        self.root = None  # Root of the MCTS tree
+        self.num_rollouts_per_simulation = 5  # Number of rollouts per simulation
+        self.time_per_move = 5  # Time allocated per move in seconds
+        self.lgrf_table = {}  # Last Good Reply with Forgetting
+        self.opponent_last_move = None  # Track opponent's last move
+        self.opponent_moves = set()  # Set to track opponent's moves
 
     def get_move(self, state: np.array) -> Tuple[int, int]:
-        """
-        Given the current state of the board, return the next move.
-        
-        Parameters:
-        - state: np.array
-            A numpy array representing the board state.
-
-        Returns:
-        - Tuple[int, int]: Coordinates of the board cell where the move will be placed.
-        """
-        # Get all valid moves from the current board state
+        start_time = time.time()
         valid_moves = get_valid_actions(state)
-        
-        # Check if AI has a winning move
+        opponent_number = 2 if self.player_number == 1 else 1
+
+        # Update opponent's moves
+        self.update_opponent_moves(state)
+
+        # Check if AI can win with this move
         for move in valid_moves:
             temp_state = np.copy(state)
             temp_state[move[0], move[1]] = self.player_number
-
-            # Check if this move results in a win
             if check_win(temp_state, move, self.player_number)[0]:
-                print(f"AI winning move: {move}")
-                return move
+                print(f"AI selects winning move: {move}")
+                self.opponent_last_move = move
+                return (int(move[0]), int(move[1]))
 
-        # Check if opponent is one move away from winning and block it
-        opponent_number = 2 if self.player_number == 1 else 1
+        # Check if opponent can win with the next move and block it
         for move in valid_moves:
             temp_state = np.copy(state)
             temp_state[move[0], move[1]] = opponent_number
-
-            # Check if this move results in a win for the opponent
             if check_win(temp_state, move, opponent_number)[0]:
-                print(f"Blocking opponent's move: {move}")
-                return move
-        
-        # If no immediate win or block is found, choose a random valid move
-        if valid_moves:
-            random_move = random.choice(valid_moves)
-            print(f"Random move: {random_move}")
-            return random_move
+                print(f"AI blocks opponent's winning move: {move}")
+                self.opponent_last_move = move
+                return (int(move[0]), int(move[1]))
 
-        # No valid moves, return None
+        # Check if we can form the triple VC frame
+        move = self.form_triple_vc(state)
+        if move:
+            print(f"AI forms triple VC frame at: {move}")
+            self.opponent_last_move = move
+            return (int(move[0]), int(move[1]))
+
+        # Check if we need to block opponent's triple VC frame
+        move = self.block_triple_vc(state)
+        if move:
+            print(f"AI blocks opponent's triple VC frame at: {move}")
+            self.opponent_last_move = move
+            return (int(move[0]), int(move[1]))
+
+        # Look for 3-move combinations to block or win
+        combo_move = self.lookahead_checkmate(state, valid_moves)
+        if combo_move:
+            print(f"AI selects strategic move: {combo_move}")
+            self.opponent_last_move = combo_move
+            return (int(combo_move[0]), int(combo_move[1]))
+
+        # Update or create root node for MCTS
+        if self.root is not None:
+            self.root = self.update_tree_with_opponent_move(state)
+        else:
+            self.root = self.MCTSNode(state, None, player=self.player_number)
+
+        # MCTS with adaptive simulations based on remaining time
+        mcts_move = self.mcts_mix(state, valid_moves, start_time)
+        if mcts_move in valid_moves:
+            print(f"AI selects MCTS move: {mcts_move}")
+            self.opponent_last_move = mcts_move
+            return (int(mcts_move[0]), int(mcts_move[1]))
+        else:
+            # As a safety net, return a random valid move
+            safe_move = random.choice(valid_moves)
+            print(f"AI selects fallback move: {safe_move}")
+            self.opponent_last_move = safe_move
+            return (int(safe_move[0]), int(safe_move[1]))
+
+    def update_opponent_moves(self, state):
+        # Update the set of opponent's moves based on the current state
+        opponent_number = 2 if self.player_number == 1 else 1
+        opponent_positions = np.argwhere(state == opponent_number)
+        self.opponent_moves = set(tuple(pos) for pos in opponent_positions)
+
+    def get_triple_vc_patterns(self):
+        # Hardcoded patterns for a size 4 board (7x7 grid)
+        patterns = [
+            [(0,0), (1,2), (0,3)],
+            [(0,3), (2,4), (3,6)],
+            [(3,6), (5,4), (6,3)],
+            [(6,3), (5,1), (6,0)],
+            [(6,0), (4,1), (3,0)],
+            [(3,0), (1,2), (0,0)]
+        ]
+        return patterns
+
+    def form_triple_vc(self, state):
+        patterns = self.get_triple_vc_patterns()
+        for pattern in patterns:
+            occupied_positions = []
+            empty_positions = []
+            for pos in pattern:
+                if 0 <= pos[0] < state.shape[0] and 0 <= pos[1] < state.shape[1]:
+                    if state[pos[0], pos[1]] == self.player_number:
+                        occupied_positions.append(pos)
+                    elif state[pos[0], pos[1]] == 0:
+                        empty_positions.append(pos)
+                    else:
+                        break  # Opponent occupies this position; cannot form this pattern
+                else:
+                    break  # Position out of bounds; skip this pattern
+            else:
+                # If we can occupy the empty positions to complete the pattern
+                if len(empty_positions) > 0:
+                    return empty_positions[0]  # Prioritize occupying the first empty position
         return None
 
-
-import random
-import numpy as np
-from typing import Tuple
-from helper import get_valid_actions
-
-class AIPlayer:
-    def __init__(self, player_number: int, timer, max_depth=4):
-        self.player_number = player_number
-        self.opponent_number = 2 if player_number == 1 else 1
-        self.type = 'ai'
-        self.player_string = 'Player {}: ai'.format(player_number)
-        self.timer = timer
-        self.max_depth = max_depth
-        self.move_count = 0
-        
-        self.opening_moves_player_1_a2 = [(2, 0), (1, 0), (1, 1)]  # a2, a1, b2
-        self.opening_moves_player_2_a2 = [(1, 4), (3, 2), (4, 1)]  # b5, d3, e2
-
-    def get_move(self, state: np.array) -> Tuple[int, int]:
-        if state.shape[0] == 5 and self.move_count < 1:
-            return self.get_opening_move(state)
-        mate_in_one_move = self.check_mate_in_one(state)
-        if mate_in_one_move is not None:
-            return mate_in_one_move            
-        return self.iterative_deepening_search(state)
-
-    def check_mate_in_one(self, state: np.array) -> Tuple[int, int]:
-        # Check if we can win with a mate-in-one
-        for move in get_valid_actions(state, self.player_number):
-            new_state = self.simulate_move(state, move, self.player_number)
-            if check_win(new_state, self.player_number):
-                return move
-
-        # Check if the opponent can win with a mate-in-one and block it
-        for move in get_valid_actions(state, self.opponent_number):
-            new_state = self.simulate_move(state, move, self.opponent_number)
-            if check_win(new_state, self.opponent_number):
-                return move
-                
-    def get_opening_move(self, state: np.array) -> Tuple[int, int]:
-        if self.player_number == 1:
-            move = self.opening_moves_player_1_a2[self.move_count]
-        else:
-            move = self.opening_moves_player_2_a2[self.move_count]
-        self.move_count += 1
-        return move
-
-    def iterative_deepening_search(self, state: np.array) -> Tuple[int, int]:
-        best_move = None
-        best_score = -float('inf')
-        for depth in range(1, self.max_depth + 1):
-            move, score = self.minimax(state, depth, True, -float('inf'), float('inf'))
-            if score > best_score:
-                best_score = score
-                best_move = move
-        return best_move
-
-    def minimax(self, state: np.array, depth: int, is_maximizing: bool, alpha: float, beta: float) -> Tuple[Tuple[int, int], float]:
-        valid_moves = get_valid_actions(state, self.player_number if is_maximizing else self.opponent_number)
-        if depth == 0 or not valid_moves:
-            return None, self.evaluate_board(state)
-
-        best_move = None
-        if is_maximizing:
-            best_score = -float('inf')
-            for move in valid_moves:
-                new_state = self.simulate_move(state, move, self.player_number)
-                _, score = self.minimax(new_state, depth - 1, False, alpha, beta)
-                if score > best_score:
-                    best_score = score
-                    best_move = move
-                alpha = max(alpha, score)
-                if beta <= alpha:
-                    break
-            return best_move, best_score
-        else:
-            best_score = float('inf')
-            for move in valid_moves:
-                new_state = self.simulate_move(state, move, self.opponent_number)
-                _, score = self.minimax(new_state, depth - 1, True, alpha, beta)
-                if score < best_score:
-                    best_score = score
-                    best_move = move
-                beta = min(beta, score)
-                if beta <= alpha:
-                    break
-            return best_move, best_score
-
-    def simulate_move(self, state: np.array, move: Tuple[int, int], player: int) -> np.array:
-        new_state = state.copy()
-        new_state[move[0], move[1]] = player
-        return new_state
-
-    def evaluate_board(self, state: np.array) -> float:
-        """
-        Evaluate the board state by summing heuristic values based on:
-        - Virtual Connections (value 100)
-        - Connectivity (value 20)
-        - Locality (value 3)
-        - Local Reply (value 5)
-        - Distance (value 2)
-        - Group Size (value 2)
-        """
-        virtual_connections_score = self.virtual_connections(state, self.player_number)
-        connectivity_score = self.connectivity(state, self.player_number)
-        locality_score = self.locality(state, self.player_number)
-        local_reply_score = self.local_reply(state, self.player_number)
-        distance_score = self.distance_heuristic(state, self.player_number)
-        group_size_score = self.group_size(state, self.player_number)
-        
-        # Combine all heuristic scores
-        total_score = (10 * virtual_connections_score) + \
-                      (5 * connectivity_score) + \
-                      (3 * locality_score) + \
-                      (5 * local_reply_score) + \
-                      (2 * distance_score) + \
-                      (2 * group_size_score)
-        
-        # Opponent's score (subtract their potential)
-        opponent_total_score = self.evaluate_opponent(state)
-        
-        # Maximize our potential and minimize the opponent's potential
-        return total_score - opponent_total_score
-
-    def evaluate_opponent(self, state: np.array) -> float:
-        """
-        Evaluates the opponent's board by using the same heuristics as for the player.
-        """
-        opponent_virtual_connections = self.virtual_connections(state, self.opponent_number)
-        opponent_connectivity = self.connectivity(state, self.opponent_number)
-        opponent_locality = self.locality(state, self.opponent_number)
-        opponent_local_reply = self.local_reply(state, self.opponent_number)
-        opponent_distance = self.distance_heuristic(state, self.opponent_number)
-        opponent_group_size = self.group_size(state, self.opponent_number)
-        
-        return (10 * opponent_virtual_connections) + \
-               (5 * opponent_connectivity) + \
-               (3 * opponent_locality) + \
-               (5 * opponent_local_reply) + \
-               (2 * opponent_distance) + \
-               (2 * opponent_group_size)
-
-    # Fixed version of virtual_connections and helper methods
-    def virtual_connections(self, state: np.array, player_number: int) -> float:
-        groups = self.get_connected_groups(state, player_number)
-        total_virtual_score = 0
-        for i in range(len(groups)):
-            for j in range(i + 1, len(groups)):
-                group1 = groups[i]
-                group2 = groups[j]
-                moves_needed = self.estimate_virtual_connection(group1, group2, state)
-                if moves_needed == 0:
-                    total_virtual_score += 10
-                elif moves_needed == 1:
-                    total_virtual_score += 8
-                elif moves_needed == 2:
-                    total_virtual_score += 5
+    def block_triple_vc(self, state):
+        opponent_number = 2 if self.player_number == 1 else 1
+        patterns = self.get_triple_vc_patterns()
+        for pattern in patterns:
+            opponent_positions = []
+            empty_positions = []
+            for pos in pattern:
+                if 0 <= pos[0] < state.shape[0] and 0 <= pos[1] < state.shape[1]:
+                    if state[pos[0], pos[1]] == opponent_number:
+                        opponent_positions.append(pos)
+                    elif state[pos[0], pos[1]] == 0:
+                        empty_positions.append(pos)
+                    else:
+                        break  # We occupy this position; opponent cannot form this pattern
                 else:
-                    total_virtual_score += 1
-        return total_virtual_score
-
-    def estimate_virtual_connection(self, group1: list, group2: list, state: np.array) -> int:
-        from collections import deque
-        queue = deque([(pos, 0) for pos in group1])
-        visited = set(group1)
-        while queue:
-            current, steps = queue.popleft()
-            if current in group2:
-                return steps
-            neighbors = self.get_neighbors(current[0], current[1], state)
-            for neighbor in neighbors:
-                if neighbor not in visited and state[neighbor[0], neighbor[1]] == 0:
-                    visited.add(neighbor)
-                    queue.append((neighbor, steps + 1))
-        return float('inf')
-
-    # Helper function: Connectivity, Locality, etc.
-    # (Implementations for other heuristics)
-    def connectivity(self, state: np.array, player_number: int) -> float:
-        """
-        Evaluates the connectivity of the player's stones.
-        Higher connectivity means that the player's stones are well-connected.
-        """
-        groups = self.get_connected_groups(state, player_number)
-        total_connectivity_score = 0
-
-        for group in groups:
-            group_size = len(group)
-            if group_size >= 6:
-                total_connectivity_score += 20  # Large connected group
-            elif group_size >= 4:
-                total_connectivity_score += 10  # Medium connected group
+                    break  # Position out of bounds; skip this pattern
             else:
-                total_connectivity_score += 2   # Small connected group
+                # If the opponent can occupy the empty positions to complete the pattern
+                if len(opponent_positions) >= 2 and len(empty_positions) > 0:
+                    return empty_positions[0]  # Block the opponent by occupying one of the empty positions
+        return None
 
-        return total_connectivity_score
+    def lookahead_checkmate(self, state: np.array, valid_moves: list) -> Tuple[int, int]:
+        opponent_number = 2 if self.player_number == 1 else 1
 
-    def locality(self, state: np.array, player_number: int) -> float:
-        """
-        Favors moves that are close to the player's existing pieces.
-        This helps reinforce existing structures or making progress towards a winning condition.
-        """
-        groups = self.get_connected_groups(state, player_number)
-        locality_score = 0
+        for first_move in valid_moves:
+            temp_state_1 = np.copy(state)
+            temp_state_1[first_move[0], first_move[1]] = self.player_number
 
-        for group in groups:
-            for stone in group:
-                neighbors = self.get_neighbors(stone[0], stone[1], state)
-                empty_neighbors = sum(1 for neighbor in neighbors if state[neighbor[0], neighbor[1]] == 0)
-                locality_score += empty_neighbors
+            if check_win(temp_state_1, first_move, self.player_number)[0]:
+                return first_move
 
-        return locality_score
+            opponent_moves = get_valid_actions(temp_state_1)
+            for second_move in opponent_moves:
+                temp_state_2 = np.copy(temp_state_1)
+                temp_state_2[second_move[0], second_move[1]] = opponent_number
 
-    def local_reply(self, state: np.array, player_number: int) -> float:
-        """
-        This heuristic measures whether the player is responding to the opponent's recent moves.
-        Encourages blocking or countering the opponent's progress by placing stones near them.
-        """
-        opponent_moves = self.get_opponent_recent_moves(state)
-        local_reply_score = 0
+                if check_win(temp_state_2, second_move, opponent_number)[0]:
+                    continue  # Opponent can win; this path is not favorable
 
-        for opponent_move in opponent_moves:
-            neighbors = self.get_neighbors(opponent_move[0], opponent_move[1], state)
-            local_reply_score += sum(1 for neighbor in neighbors if state[neighbor[0], neighbor[1]] == player_number)
+                third_moves = get_valid_actions(temp_state_2)
+                for third_move in third_moves:
+                    temp_state_3 = np.copy(temp_state_2)
+                    temp_state_3[third_move[0], third_move[1]] = self.player_number
 
-        return local_reply_score
+                    if check_win(temp_state_3, third_move, self.player_number)[0]:
+                        return first_move
 
-    def get_opponent_recent_moves(self, state: np.array) -> list:
-        """
-        Finds recent moves made by the opponent by checking the board's current state.
-        """
-        opponent_moves = []
-        for i in range(state.shape[0]):
-            for j in range(state.shape[1]):
-                if state[i, j] == self.opponent_number:
-                    opponent_moves.append((i, j))
-        return opponent_moves
+        return None
 
-    def distance_heuristic(self, state: np.array, player_number: int) -> float:
-        """
-        This heuristic minimizes the distance between the player's stones.
-        The closer the player's stones are to each other, the more control they have over the board.
-        """
-        groups = self.get_connected_groups(state, player_number)
-        total_distance_score = 0
+    def update_tree_with_opponent_move(self, state):
+        for child in self.root.children:
+            if np.array_equal(child.state, state):
+                return child
+        return self.MCTSNode(state, None, player=self.player_number)
 
-        for group in groups:
-            if len(group) > 1:
-                total_distance = 0
-                for i in range(len(group)):
-                    for j in range(i + 1, len(group)):
-                        total_distance += abs(group[i][0] - group[j][0]) + abs(group[i][1] - group[j][1])
-                avg_distance = total_distance / (len(group) * (len(group) - 1) / 2)
-                total_distance_score += (1 / (avg_distance + 1))  # Inverse of average distance
+    def mcts_mix(self, state: np.array, valid_moves: list, start_time: float) -> Tuple[int, int]:
+        simulations = 0
+        time_limit = self.time_per_move - 0.1  # Reserve a bit of time
+        while time.time() - start_time < time_limit:
+            # Decide whether to use heuristics or not
+            use_heuristics = random.random() < 0.6  # 60% chance to use heuristics
+            node, state_copy = self.select_node(self.root, use_heuristics)
+            if not node.children:
+                self.expand_node(node, node.player, use_heuristics)
+            rewards = [self.rollout(state_copy, use_heuristics) for _ in range(self.num_rollouts_per_simulation)]
+            average_reward = sum(rewards) / len(rewards)
+            self.backpropagate(node, average_reward)
+            simulations += 1
 
-        return total_distance_score
+        print(f"Simulations performed: {simulations}")
 
-    def group_size(self, state: np.array, player_number: int) -> float:
-        """
-        Favors larger groups of connected stones. Larger groups offer more board control and are closer to forming winning structures.
-        """
-        groups = self.get_connected_groups(state, player_number)
-        total_group_size_score = 0
+        if self.root.children:
+            # Select the move with the highest visit count
+            best_child = max(self.root.children, key=lambda x: x.visits)
+            return best_child.move
 
-        for group in groups:
-            total_group_size_score += len(group) ** 2  # Exponential reward for large groups
+        # If no children (should not happen), return a random valid move
+        return random.choice(valid_moves)
 
-        return total_group_size_score
+    def select_node(self, node, use_heuristics):
+        state_copy = np.copy(node.state)
+        while node.children:
+            # Prioritize proven wins
+            proven_wins = [child for child in node.children if child.is_terminal and child.is_win]
+            if proven_wins:
+                node = random.choice(proven_wins)
+            else:
+                # Avoid proven losses
+                non_losing_children = [child for child in node.children if not (child.is_terminal and not child.is_win)]
+                if non_losing_children:
+                    node = self.ucb_select(node, non_losing_children, use_heuristics)
+                else:
+                    # All children are proven losses, select any child
+                    node = random.choice(node.children)
+            # Apply the move to the state copy
+            if node.move is not None:
+                state_copy[node.move[0], node.move[1]] = node.player
+        return node, state_copy
 
-    def get_neighbors(self, i: int, j: int, state: np.array) -> list:
-        """
-        Returns a list of neighboring cells for the given position (i, j).
-        Only valid (within the board) and non-blocked neighbors are returned.
-        """
-        directions = [(-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0)]
-        neighbors = []
-        dim = state.shape[0]
-        for di, dj in directions:
-            ni, nj = i + di, j + dj
-            if 0 <= ni < dim and 0 <= nj < dim and state[ni, nj] != 3:
-                neighbors.append((ni, nj))
-        return neighbors
+    def expand_node(self, node, player_number, use_heuristics):
+        opponent_number = 2 if player_number == 1 else 1
+        valid_moves = get_valid_actions(node.state)
 
-    def get_connected_groups(self, state: np.array, player_number: int) -> list:
-        """
-        Returns a list of connected groups of stones for the given player.
-        Each group is a list of tuples representing the positions of the stones in that group.
-        """
+        # Check for immediate win
+        for move in valid_moves:
+            temp_state = np.copy(node.state)
+            temp_state[move[0], move[1]] = player_number
+            if check_win(temp_state, move, player_number)[0]:
+                # Winning move found
+                child_node = self.MCTSNode(temp_state, move, parent=node, player=opponent_number)
+                child_node.is_terminal = True
+                child_node.is_win = True
+                node.children = [child_node]
+                self.backup_proof(child_node)
+                return
+
+        # Check for opponent threats
+        immediate_threats = []
+        for move in valid_moves:
+            temp_state = np.copy(node.state)
+            temp_state[move[0], move[1]] = opponent_number
+            if check_win(temp_state, move, opponent_number)[0]:
+                immediate_threats.append(move)
+
+        if len(immediate_threats) == 1:
+            # Must block the threat
+            move = immediate_threats[0]
+            temp_state = np.copy(node.state)
+            temp_state[move[0], move[1]] = player_number
+            child_node = self.MCTSNode(temp_state, move, parent=node, player=opponent_number)
+            node.children = [child_node]
+            self.expand_node(child_node, opponent_number, use_heuristics)
+        elif len(immediate_threats) >= 2:
+            # Cannot block all threats, node is a loss
+            node.is_terminal = True
+            node.is_win = False
+            self.backup_proof(node)
+            return
+        else:
+            # No immediate win or loss, proceed normally
+            for move in valid_moves:
+                temp_state = np.copy(node.state)
+                temp_state[move[0], move[1]] = player_number
+                heuristic_value = 0
+                if use_heuristics:
+                    heuristic_value = self.evaluate_move_heuristic(temp_state, move, player_number)
+                child_node = self.MCTSNode(temp_state, move, parent=node, player=opponent_number, heuristic_value=heuristic_value)
+                node.children.append(child_node)
+
+    def backup_proof(self, node):
+        # Back up the proof to parent nodes
+        while node.parent is not None:
+            parent = node.parent
+            if node.is_win:
+                # If child is a win for current player, parent is a loss for opponent
+                parent.is_terminal = True
+                parent.is_win = False
+            else:
+                # If all children are losses, parent is a win
+                if all(child.is_terminal and not child.is_win for child in parent.children):
+                    parent.is_terminal = True
+                    parent.is_win = True
+                else:
+                    break
+            node = parent
+
+    def ucb_select(self, node, children=None, use_heuristics=True):
+        if children is None:
+            children = node.children
+        total_visits = sum(child.visits for child in children) + 1
+        ucb_values = []
+        for child in children:
+            exploitation = (child.value / (child.visits + 1e-5))
+            exploration = np.sqrt(np.log(total_visits) / (child.visits + 1e-5))
+            heuristic_bias = 0
+            if use_heuristics:
+                heuristic_bias = (child.heuristic_value * self.heuristic_weight) / (child.visits + 1)
+            ucb_value = exploitation + 2 * exploration + heuristic_bias
+            ucb_values.append(ucb_value)
+        max_index = np.argmax(ucb_values)
+        return children[max_index]
+
+    def rollout(self, state: np.array, use_heuristics: bool) -> float:
+        # Create a copy of the state to avoid modifying the original
+        state_copy = np.copy(state)
+        current_player = self.player_number
+        opponent_number = 2 if self.player_number == 1 else 1
+        moves_played = []
+        move_number = 0
+        max_ring_depth = int(0.7 * (state_copy.size - np.count_nonzero(state_copy)))  # 70% of remaining moves
+        while True:
+            valid_moves = get_valid_actions(state_copy)
+            if not valid_moves:
+                break
+
+            # Mate-in-one check for current player (first N moves)
+            N = (state_copy.size - np.count_nonzero(state_copy)) // 2
+            if move_number < N:
+                for move in valid_moves:
+                    temp_state = np.copy(state_copy)
+                    temp_state[move[0], move[1]] = current_player
+                    if check_win(temp_state, move, current_player)[0]:
+                        state_copy[move[0], move[1]] = current_player
+                        moves_played.append((current_player, move))
+                        return 1.0 if current_player == self.player_number else 0.0
+
+            if use_heuristics:
+                # LGRF policy
+                opponent_last_move = moves_played[-1][1] if moves_played else None
+                lgrf_move = self.lgrf_table.get((opponent_last_move, current_player), None)
+                if lgrf_move and lgrf_move in valid_moves:
+                    move = lgrf_move
+                else:
+                    # Heuristic rollout policy
+                    moves_with_heuristics = []
+                    for move in valid_moves:
+                        heuristic_value = self.evaluate_move_heuristic(state_copy, move, current_player)
+                        moves_with_heuristics.append((move, heuristic_value))
+
+                    # Select move with highest heuristic value
+                    if moves_with_heuristics:
+                        moves_with_heuristics.sort(key=lambda x: x[1], reverse=True)
+                        top_moves = [m for m in moves_with_heuristics if m[1] == moves_with_heuristics[0][1]]
+                        move = random.choice(top_moves)[0]
+                    else:
+                        move = random.choice(valid_moves)
+            else:
+                # Random rollout
+                move = random.choice(valid_moves)
+
+            state_copy[move[0], move[1]] = current_player
+            moves_played.append((current_player, move))
+            move_number += 1
+
+            win_result = check_win(state_copy, move, current_player)
+            if win_result[0]:
+                if win_result[1] == 'ring':
+                    if move_number <= max_ring_depth:
+                        # Accept the ring win
+                        # Update LGRF table
+                        if use_heuristics and current_player == self.player_number:
+                            for i in range(len(moves_played) - 2, -1, -2):
+                                key = (moves_played[i][1], moves_played[i][0])
+                                self.lgrf_table[key] = moves_played[i + 1][1]
+                        return 1.0 if current_player == self.player_number else 0.0
+                    else:
+                        # Ignore the ring win, continue the rollout
+                        pass
+                else:
+                    # Bridge or fork win
+                    # Update LGRF table
+                    if use_heuristics and current_player == self.player_number:
+                        for i in range(len(moves_played) - 2, -1, -2):
+                            key = (moves_played[i][1], moves_played[i][0])
+                            self.lgrf_table[key] = moves_played[i + 1][1]
+                    return 1.0 if current_player == self.player_number else 0.0
+
+            # Switch player
+            current_player = opponent_number if current_player == self.player_number else self.player_number
+        return 0.5  # Return a neutral reward if no winner
+
+    def backpropagate(self, node, reward: float):
+        while node is not None:
+            node.visits += 1
+            node.value += reward
+            node = node.parent
+
+    def evaluate_move_heuristic(self, state, move, player_number):
+        heuristic_value = 0
+        dim = (state.shape[0] + 1) // 2
+        opponent_number = 2 if player_number == 1 else 1
+
+        # Do not consider moves that are already occupied
+        if state[move[0], move[1]] != 0:
+            return float('-inf')  # Invalid move; assign negative infinity to avoid selection
+
+        # Heuristic 1: Locality (playing near own stones)
+        own_stones = np.argwhere(state == player_number)
+        if own_stones.size > 0:
+            distances = np.abs(own_stones - move).sum(axis=1)
+            min_distance = np.min(distances)
+            if min_distance == 1:
+                heuristic_value += 3  # Direct neighbor
+            elif min_distance == 2:
+                heuristic_value += 2  # Potential VC
+            elif min_distance == 3:
+                heuristic_value += 1  # Distance 2 but not VC
+
+        # Heuristic 2: Edge Connectivity
+        edge_bonus = 0
+        group_edges = self.get_group_edges(state, move, player_number)
+        edge_bonus += len(group_edges)
+        heuristic_value += edge_bonus * 2  # Bonus per connected edge
+
+        # Heuristic 3: Group Size
+        group_size = len(self.get_connected_group(state, move, player_number))
+        heuristic_value += group_size // 2  # Bonus for larger groups
+
+        # Heuristic 4: Local Reply (playing near opponent's last move)
+        if self.opponent_last_move is not None:
+            distance_to_opponent = np.abs(np.array(self.opponent_last_move) - np.array(move)).sum()
+            if distance_to_opponent == 1:
+                heuristic_value += 3  # Direct neighbor
+            elif distance_to_opponent == 2:
+                heuristic_value += 2
+            elif distance_to_opponent == 3:
+                heuristic_value += 1
+
+        # Heuristic 5: Virtual Connections Enhancement
+        vc_bonus = self.evaluate_virtual_connection(state, move, player_number)
+        heuristic_value += vc_bonus
+
+        # Heuristic 6: Opponent Blocking VC
+        if self.is_opponent_blocking_vc(state, move, player_number):
+            heuristic_value -= 5  # Penalty for moves that allow the opponent to block VCs
+
+        return heuristic_value
+
+    def evaluate_virtual_connection(self, state, move, player_number):
+        dim = (state.shape[0] + 1) // 2
+        opponent_number = 2 if player_number == 1 else 1
+
+        # Apply the move
+        state_after = np.copy(state)
+        state_after[move[0], move[1]] = player_number
+
+        # Get connected components after the move
+        components = self.get_player_connected_components(state_after, player_number)
+
+        vc_bonus = 0
+        for component in components:
+            edges, corners = self.get_component_edges_corners(component, dim)
+            connections = len(edges) + len(corners)
+
+            # Check for potential winning conditions
+            if connections >= 2:
+                vc_bonus += 10  # Significant bonus for connecting multiple edges/corners
+
+            if len(corners) >= 2:
+                vc_bonus += 50  # High bonus for connecting two corners
+            if len(edges) >= 3:
+                vc_bonus += 50  # High bonus for connecting three edges
+
+            # Bonus for moves that join existing VCs
+            if self.joins_virtual_connections(state, move, player_number):
+                vc_bonus += 30  # Assign a high bonus for joining VCs
+
+            # General bonus for increasing VC set size
+            vc_bonus += connections * 2  # Adjust the multiplier as needed
+
+            # Subtract points if opponent's stones are blocking the component
+            for pos in component:
+                for neighbor in get_neighbours(dim, pos):
+                    if tuple(neighbor) in self.opponent_moves:
+                        vc_bonus -= 2  # Penalty for each opponent stone adjacent to the component
+
+        return vc_bonus
+
+    def joins_virtual_connections(self, state, move, player_number):
+        # Determine if the move joins two or more of the player's existing VCs
+        state_before = np.copy(state)
+        components_before = self.get_player_connected_components(state_before, player_number)
+        num_components_before = len(components_before)
+
+        # Apply the move
+        state_after = np.copy(state)
+        state_after[move[0], move[1]] = player_number
+        components_after = self.get_player_connected_components(state_after, player_number)
+        num_components_after = len(components_after)
+
+        # If the number of components decreases, the move has joined VCs
+        return num_components_after < num_components_before
+
+    def is_opponent_blocking_vc(self, state, move, player_number):
+        opponent_number = 2 if player_number == 1 else 1
+        dim = (state.shape[0] + 1) // 2
+
+        # Compute player's VC set before the opponent's move
+        components_before = self.get_player_connected_components(state, player_number)
+        vc_set_before = set()
+        for component in components_before:
+            edges, corners = self.get_component_edges_corners(component, dim)
+            vc_set_before.update(edges)
+            vc_set_before.update(corners)
+        vc_size_before = len(vc_set_before)
+
+        # Apply the opponent's move
+        state_after = np.copy(state)
+        state_after[move[0], move[1]] = opponent_number
+
+        # Compute player's VC set after the opponent's move
+        components_after = self.get_player_connected_components(state_after, player_number)
+        vc_set_after = set()
+        for component in components_after:
+            edges, corners = self.get_component_edges_corners(component, dim)
+            vc_set_after.update(edges)
+            vc_set_after.update(corners)
+        vc_size_after = len(vc_set_after)
+
+        # Determine if the opponent's move blocks the player's VC
+        return vc_size_after < vc_size_before
+
+    def get_player_connected_components(self, state, player_number):
         visited = set()
-        groups = []
-        dim = state.shape[0]
+        components = []
+        for row in range(state.shape[0]):
+            for col in range(state.shape[1]):
+                if state[row, col] == player_number and (row, col) not in visited:
+                    component = set()
+                    queue = deque()
+                    queue.append((row, col))
+                    visited.add((row, col))
+                    component.add((row, col))
+                    while queue:
+                        pos = queue.popleft()
+                        neighbors = get_neighbours((state.shape[0] + 1) // 2, pos)
+                        for n in neighbors:
+                            n_pos = (n[0], n[1])
+                            if state[n[0], n[1]] == player_number and n_pos not in visited:
+                                visited.add(n_pos)
+                                component.add(n_pos)
+                                queue.append(n_pos)
+                    components.append(component)
+        return components
 
-        for i in range(dim):
-            for j in range(dim):
-                if (i, j) not in visited and state[i, j] == player_number:
-                    group = self.dfs(state, i, j, player_number, visited)
-                    groups.append(group)
+    def get_component_edges_corners(self, component, dim):
+        edges = set()
+        corners = set()
+        for pos in component:
+            edge = get_edge(pos, dim)
+            if edge != -1:
+                edges.add(edge)
+            corner = get_corner(pos, dim)
+            if corner != -1:
+                corners.add(corner)
+        return edges, corners
 
-        return groups
+    def get_group_edges(self, state, move, player_number):
+        dim = (state.shape[0] + 1) // 2
+        group = self.get_connected_group(state, move, player_number)
+        edges_connected = set()
+        for pos in group:
+            edge = get_edge(pos, dim)
+            if edge != -1:
+                edges_connected.add(edge)
+            corner = get_corner(pos, dim)
+            if corner != -1:
+                edges_connected.add(corner + 6)  # Distinguish corners
+        return edges_connected
 
-    def dfs(self, state: np.array, i: int, j: int, player_number: int, visited: set) -> list:
-        """
-        Performs a depth-first search (DFS) to find all connected stones of the player.
-        Returns the group of connected stones as a list of positions.
-        """
-        stack = [(i, j)]
-        group = []
+    def get_connected_group(self, state, start_pos, player_number):
+        visited = set()
+        queue = deque()
+        queue.append(tuple(start_pos))
+        visited.add(tuple(start_pos))
+        while queue:
+            pos = queue.popleft()
+            neighbors = get_neighbours((state.shape[0] + 1) // 2, pos)
+            for n in neighbors:
+                n_pos = (n[0], n[1])
+                if state[n[0], n[1]] == player_number and n_pos not in visited:
+                    visited.add(n_pos)
+                    queue.append(n_pos)
+        return visited
 
-        while stack:
-            x, y = stack.pop()
-            if (x, y) not in visited:
-                visited.add((x, y))
-                group.append((x, y))
-                neighbors = self.get_neighbors(x, y, state)
-                for neighbor in neighbors:
-                    if state[neighbor[0], neighbor[1]] == player_number:
-                        stack.append(neighbor)
-
-        return group
+    class MCTSNode:
+        def __init__(self, state, move, parent=None, player=1, heuristic_value=0):
+            self.state = state
+            self.move = move
+            self.parent = parent
+            self.children = []
+            self.visits = 0
+            self.value = 0.0
+            self.player = player  # The player who made the move to reach this state
+            self.heuristic_value = heuristic_value  # The heuristic value for this node
+            self.is_terminal = False
+            self.is_win = False
