@@ -121,7 +121,7 @@ class AIPlayer:
             self.dimension = len(state)
             if self.dimension == 7: 
                 print("Customized simulations")
-                self.default_simulations = 1000
+                self.default_simulations = 10000
                 self.simulations = self.default_simulations
                 self.default_rollout_depth = 6
                 self.rollout_depth = self.default_rollout_depth
@@ -150,7 +150,7 @@ class AIPlayer:
             self.first_run = False
 
         if self.target_locked == True:
-                self.simulations = 1000
+                self.simulations = 30000
                 print("Target is locked")
                 if self.target_cooldown == 0:
                     self.target_locked = False
@@ -255,6 +255,7 @@ class AIPlayer:
 
         self.simulations = self.default_simulations
         for _ in range(self.simulations):
+            print(self.simulations)
             node, state_copy = self.select_node(root)
             reward = self.rollout(state_copy)
             self.backpropagate(node, reward)
@@ -315,9 +316,11 @@ class AIPlayer:
                 moves_with_heuristics.append((move, heuristic_value))
 
             if moves_with_heuristics:
-                moves_with_heuristics.sort(key=lambda x: x[1], reverse=True)
-                top_moves = [m for m in moves_with_heuristics if m[1] == moves_with_heuristics[0][1]]
-                move = random.choice(top_moves)[0]
+                # moves_with_heuristics.sort(key=lambda x: x[1], reverse=True)
+                # half_index = len(moves_with_heuristics) // 2
+                # top_half_moves = moves_with_heuristics[:half_index]
+                top_half_moves = moves_with_heuristics
+                move = random.choice(top_half_moves)[0]
             else:
                 move = random.choice(valid_moves)
             state_copy[move[0], move[1]] = current_player
@@ -459,9 +462,9 @@ class AIPlayer:
         #     heuristic_value += 5
         # Heuristic 3: Group Size (approximate)
         # Bonus for connecting to own stones
-        neighbors = get_neighbours(self.dimension, move)
-        own_neighbors = [n for n in neighbors if state[n[0], n[1]] == player_number]
-        heuristic_value += len(own_neighbors)  # Bonus for each own neighbor
+        # neighbors = get_neighbours(self.dimension, move)
+        # own_neighbors = [n for n in neighbors if state[n[0], n[1]] == self.player_number]
+        # heuristic_value += len(own_neighbors)  # Bonus for each own neighbor
         return heuristic_value
     #___________________________________________________________________________________________
     def set_anchor_point(self, anchor, factor=0.97):
