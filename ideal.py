@@ -86,7 +86,7 @@ class dsus:
 
 class AIPlayer:
     def __init__(self, player_number: int, timer, max_depth: int = 3, heuristic_weight=0.5, 
-                 C: float = 0.01, TARGET_COOLDOWN: int = 3, ROLLOUT_DEPTH: int = 6, SIMULATIONS: int = 500):
+                 C: float = 0.00, TARGET_COOLDOWN: int = 3, ROLLOUT_DEPTH: int = 6, SIMULATIONS: int = 500):
         self.player_number = player_number
         self.opponent_number = 2 if player_number == 1 else 1
         self.type = 'ai2'
@@ -294,7 +294,7 @@ class AIPlayer:
         for child in node.children:
             exploitation = (child.value / (child.visits + 1e-5))
             exploration = self.C * np.sqrt(np.log(total_visits) / (child.visits + 1e-5))
-            heuristic_bias = (child.heuristic_value * self.heuristic_weight) / (child.visits + 1)
+            heuristic_bias = (child.heuristic_value * self.heuristic_weight) / np.sqrt(child.visits + 1)
             ucb_value = exploitation + exploration + heuristic_bias
             ucb_values.append(ucb_value)
         max_index = np.argmax(ucb_values)
@@ -316,10 +316,10 @@ class AIPlayer:
                 moves_with_heuristics.append((move, heuristic_value))
 
             if moves_with_heuristics:
-                # moves_with_heuristics.sort(key=lambda x: x[1], reverse=True)
-                # half_index = len(moves_with_heuristics) // 2
-                # top_half_moves = moves_with_heuristics[:half_index]
-                top_half_moves = moves_with_heuristics
+                moves_with_heuristics.sort(key=lambda x: x[1], reverse=True)
+                half_index = len(moves_with_heuristics) // 2
+                top_half_moves = moves_with_heuristics[:half_index]
+                # top_half_moves = moves_with_heuristics
                 move = random.choice(top_half_moves)[0]
             else:
                 move = random.choice(valid_moves)
@@ -419,7 +419,7 @@ class AIPlayer:
                     move_counts[b] = 1
             for b, count in move_counts.items():
                 if count >= 2 and move == b:
-                    heuristic_value += 70
+                    heuristic_value += 4000
             
             # Preventing depth 1 virtual connections:_____________________________________________________
             temp_state = np.copy(state)
@@ -436,7 +436,7 @@ class AIPlayer:
                     if node in self.corners:
                         corner_count += 1
                 if corner_count >= 2:
-                    heuristic_value += 99
+                    heuristic_value += 10000
                     print("Preventing W by corners....")
                     break
             #check frame for edges:
@@ -449,7 +449,7 @@ class AIPlayer:
                         edge_count += 1
                         seen_edges.add(node_edge)
                 if edge_count >= 3:
-                    heuristic_value += 99
+                    heuristic_value += 10000
                     print("Preventing W by edges....")
                     break
             #Biasing towards the corner: 

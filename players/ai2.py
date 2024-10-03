@@ -4,7 +4,7 @@ from typing import Tuple
 from helper import *
 import copy
 
-C = 0.01
+C = 0.00
 
 class DSU:
     def __init__(self):
@@ -272,7 +272,7 @@ class AIPlayer:
         for child in node.children:
             exploitation = (child.value / (child.visits + 1e-5))
             exploration = C * np.sqrt(np.log(total_visits) / (child.visits + 1e-5))
-            heuristic_bias = (child.heuristic_value * self.heuristic_weight) / (child.visits + 1)
+            heuristic_bias = (child.heuristic_value * self.heuristic_weight) / np.sqrt(child.visits + 1)
             ucb_value = exploitation + exploration + heuristic_bias
             ucb_values.append(ucb_value)
         max_index = np.argmax(ucb_values)
@@ -335,7 +335,7 @@ class AIPlayer:
                 heuristic_value += 10
                 is_virtual = True
             if len(prev_opponent_sets) < len(new_opponent_sets):
-                heuristic_value += 20
+                heuristic_value += 9
                 blocks_virtual = True
 
             # check frame for corners: 
@@ -370,8 +370,38 @@ class AIPlayer:
                 break
 
             if move in biased_moves:
-                heuristic_value += 10000
+                heuristic_value += 4000
                 
+            temp_state = np.copy(state)
+            temp_state[move[0], move[1]] = 2
+            temp_player_dsu = self.dsus.player_dsu.copy()
+            temp_opponent_dsu = self.dsus.opponent_dsu.copy()
+            temp_opponent_dsu.insert_node(move, self.map_v_pairs, temp_state)
+            temp_player_dsu.recheck_nodes(move, self.inverse_map_v_pairs, self.map_v_pairs, temp_state)
+            new_opponent_sets = temp_opponent_dsu.get_sets()
+
+            for index in new_opponent_sets:
+                corner_count = 0
+                for node in new_opponent_sets[index]:
+                    if node in self.corners:
+                        corner_count += 1
+                if corner_count >= 2:
+                    heuristic_value += 10000
+                    print("Preventing W by corners 2....")
+                break
+            #check frame for edges:
+            for index in new_opponent_sets:
+                edge_count = 0
+                seen_edges = set()
+                for node in new_opponent_sets[index]:
+                    node_edge = get_edge(node, self.dimension)
+                    if node in self.edges and node_edge not in seen_edges:
+                        edge_count += 1
+                        seen_edges.add(node_edge)
+                if edge_count >= 3:
+                    heuristic_value += 10000
+                    print("Preventing W by edges 2....")
+                break
 
         dim = (state.shape[0] + 1) // 2
         if move in self.edges:
@@ -385,8 +415,8 @@ class AIPlayer:
         own_neighbors = [n for n in neighbors if state[n[0], n[1]] == player_number]
         heuristic_value += len(own_neighbors)  # Bonus for each own neighbor
 
-
-
+        if is_expansion:
+            print(f"Heuristic value for move {move}: {heuristic_value}")
         return heuristic_value
 
     def is_corner(self, pos, dim):
