@@ -4,11 +4,6 @@ from typing import Tuple
 from helper import *
 import copy
 
-C = -0.001
-TARGET_COOLDOWN = 3
-ROLLOUT_DEPTH = 6
-SIMULATIONS = 300
-
 class DSU:
     def __init__(self):
         self.parent = {}
@@ -90,12 +85,8 @@ class dsus:
         self.opponent_dsu = DSU()
 
 class AIPlayer:
-    global C
-    global TARGET_COOLDOWN
-    global ROLLOUT_DEPTH
-    global SIMULATIONS
-
-    def __init__(self, player_number: int, timer, max_depth: int = 3, heuristic_weight=0.5):
+    def __init__(self, player_number: int, timer, max_depth: int = 3, heuristic_weight=0.5, 
+                 C: float = -0.001, TARGET_COOLDOWN: int = 3, ROLLOUT_DEPTH: int = 6, SIMULATIONS: int = 300):
         self.player_number = player_number
         self.opponent_number = 2 if player_number == 1 else 1
         self.type = 'ai2'
@@ -116,9 +107,13 @@ class AIPlayer:
         self.bias_vector  = []
         self.biased_moves = []
         self.target_locked = False
+        self.default_target_cooldown = TARGET_COOLDOWN
+        self.default_simulations = SIMULATIONS
+        self.default_rollout_depth = ROLLOUT_DEPTH
         self.target_cooldown = TARGET_COOLDOWN
         self.simulations = SIMULATIONS
         self.rollout_depth = ROLLOUT_DEPTH
+        self.C = C
 
     def get_move(self, state: np.array) -> Tuple[int, int]:
         if self.first_run: 
@@ -126,10 +121,10 @@ class AIPlayer:
             self.dimension = len(state)
             if self.dimension == 7: 
                 print("Customized simulations")
-                SIMULATIONS = 250
-                self.simulations = SIMULATIONS
-                ROLLOUT_DEPTH = 4
-                self.rollout_depth = ROLLOUT_DEPTH
+                self.default_simulations = 1000
+                self.simulations = self.default_simulations
+                self.default_rollout_depth = 6
+                self.rollout_depth = self.default_rollout_depth
             self.corners = set(get_all_corners(len(state)))
             sides = get_all_edges(len(state))
             for i, side in enumerate(sides):
@@ -159,8 +154,8 @@ class AIPlayer:
                 print("Target is locked")
                 if self.target_cooldown == 0:
                     self.target_locked = False
-                    self.simulations = SIMULATIONS
-                    self.target_cooldown = TARGET_COOLDOWN
+                    self.simulations = self.default_simulations
+                    self.target_cooldown = self.default_target_cooldown
                     self.biased_moves = []
                     print("Target is unlocked")
                 else:
@@ -258,7 +253,7 @@ class AIPlayer:
         if not root.children:
             self.expand_node(root, self.player_number)
 
-        self.simulations = SIMULATIONS
+        self.simulations = self.default_simulations
         for _ in range(self.simulations):
             node, state_copy = self.select_node(root)
             reward = self.rollout(state_copy)
@@ -297,7 +292,7 @@ class AIPlayer:
         ucb_values = []
         for child in node.children:
             exploitation = (child.value / (child.visits + 1e-5))
-            exploration = C * np.sqrt(np.log(total_visits) / (child.visits + 1e-5))
+            exploration = self.C * np.sqrt(np.log(total_visits) / (child.visits + 1e-5))
             heuristic_bias = (child.heuristic_value * self.heuristic_weight) / (child.visits + 1)
             ucb_value = exploitation + exploration + heuristic_bias
             ucb_values.append(ucb_value)
@@ -454,17 +449,14 @@ class AIPlayer:
                     heuristic_value += 1000
                     print("Preventing W by edges....")
                     break
+            #Biasing towards the corner: 
+            if self.dimension > 7: 
+                heuristic_value -= 2*(self.bias_vector[move[0]][move[1]])
 
-        
-        #Biasing towards the corner: 
-        if self.dimension > 7: 
-            heuristic_value -= 2*(self.bias_vector[move[0]][move[1]])
-
-        if move in self.edges:
-            heuristic_value += 2
-        if move in self.corners: 
-            heuristic_value += 5
-
+        # if move in self.edges:
+        #     heuristic_value += 2
+        # if move in self.corners: 
+        #     heuristic_value += 5
         # Heuristic 3: Group Size (approximate)
         # Bonus for connecting to own stones
         neighbors = get_neighbours(self.dimension, move)
