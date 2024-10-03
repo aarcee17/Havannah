@@ -4,14 +4,16 @@ from typing import Tuple
 from helper import *
 import copy
 
-C = 0.01
+C = -0.001
+TARGET_COOLDOWN = 3
+ROLLOUT_DEPTH = 6
+SIMULATIONS = 300
 
 class DSU:
     def __init__(self):
         self.parent = {}
         self.rank = {}
         self.dimension = 0
-
     def find(self, node):
         if node not in self.parent:
             self.parent[node] = node
@@ -19,7 +21,6 @@ class DSU:
         if self.parent[node] != node:
             self.parent[node] = self.find(self.parent[node])
         return self.parent[node]
-
     def union(self, node1, node2):
         root1 = self.find(node1)
         root2 = self.find(node2)
@@ -31,12 +32,10 @@ class DSU:
             else:
                 self.parent[root2] = root1
                 self.rank[root1] += 1
-
     def connected(self, node1, node2):
         if node1 not in self.parent or node2 not in self.parent:
             return False
         return self.find(node1) == self.find(node2)
-
     def get_sets(self):
         from collections import defaultdict
         sets = defaultdict(set)
@@ -44,14 +43,11 @@ class DSU:
             root = self.find(node)
             sets[root].add(node)
         return dict(sets)
-
-
     def check_v_pairs(self, v_new, v_pair, v_n1, v_n2, state):
         # print("checking v pairs: ", v_new, v_pair, v_n1, v_n2)
         if state[v_new] == state[v_pair] and state[v_n1] == 0 and state[v_n2] == 0:
             return True
         return False 
-
     def insert_node(self, v_new, map_v_pairs, state):
         # print("inserting node: ", v_new)
         self.find(v_new)
@@ -65,7 +61,6 @@ class DSU:
             if state[v[0], v[1]] == state[v_new[0], v_new[1]]:
                 self.union(v, v_new)
         return flag_for_virtual_cc
-
     def re_evaluate(self, u, v, state, map_v_pairs):
         # print("re-evaluating: ", u, v)
         sets = self.get_sets()
@@ -74,22 +69,20 @@ class DSU:
             self.parent[node] = node
             self.rank[node] = 0 
         for node in component:
-            self.insert_node(node, map_v_pairs, state)
-
-        
+            self.insert_node(node, map_v_pairs, state)   
     def recheck_nodes(self, move, inverse_map_v_pair, map_v_pairs, state): 
         # print("rechecking nodes: ", move)
         for (u,v) in inverse_map_v_pair.get(move, []):
             if self.connected(u, v):
                 print("connected: ", u, v)
                 self.re_evaluate(u, v, state, map_v_pairs)
-
     def copy(self):
         new_dsu = DSU()
         new_dsu.parent = copy.deepcopy(self.parent)
         new_dsu.rank = copy.deepcopy(self.rank)
         new_dsu.dimension = self.dimension  # Assuming dimension is an integer
         return new_dsu
+
 
 class dsus:
     def __init__(self):
@@ -98,6 +91,10 @@ class dsus:
 
 class AIPlayer:
     global C
+    global TARGET_COOLDOWN
+    global ROLLOUT_DEPTH
+    global SIMULATIONS
+
     def __init__(self, player_number: int, timer, max_depth: int = 3, heuristic_weight=0.5):
         self.player_number = player_number
         self.opponent_number = 2 if player_number == 1 else 1
@@ -117,15 +114,27 @@ class AIPlayer:
         self.edges = {}
         self.corners = set()
         self.bias_vector  = []
+        self.biased_moves = []
+        self.target_locked = False
+        self.target_cooldown = TARGET_COOLDOWN
+        self.simulations = SIMULATIONS
+        self.rollout_depth = ROLLOUT_DEPTH
 
     def get_move(self, state: np.array) -> Tuple[int, int]:
         if self.first_run: 
+            # Initialize for specific cases here: 
+            self.dimension = len(state)
+            if self.dimension == 7: 
+                print("Customized simulations")
+                SIMULATIONS = 250
+                self.simulations = SIMULATIONS
+                ROLLOUT_DEPTH = 4
+                self.rollout_depth = ROLLOUT_DEPTH
             self.corners = set(get_all_corners(len(state)))
             sides = get_all_edges(len(state))
             for i, side in enumerate(sides):
                 for coord in side:
                     self.edges[coord] = i + 1
-            self.dimension = len(state)
             self.dsus.player_dsu.dimension = self.dimension
             self.dsus.opponent_dsu.dimension = self.dimension
             self.bias_vector = np.ones((self.dimension, self.dimension))
@@ -144,6 +153,19 @@ class AIPlayer:
                                 self.inverse_map_v_pairs[v[1]].append(((r,c),v[0]))
                                 self.inverse_map_v_pairs[v[2]].append(((r,c),v[0]))
             self.first_run = False
+
+        if self.target_locked == True:
+                self.simulations = 1000
+                print("Target is locked")
+                if self.target_cooldown == 0:
+                    self.target_locked = False
+                    self.simulations = SIMULATIONS
+                    self.target_cooldown = TARGET_COOLDOWN
+                    self.biased_moves = []
+                    print("Target is unlocked")
+                else:
+                    self.target_cooldown -= 1
+                    print(f"Target is locked for {self.target_cooldown} more turns")
 
         if self.last_state is not None:
             for r in range(len(state)):
@@ -236,8 +258,8 @@ class AIPlayer:
         if not root.children:
             self.expand_node(root, self.player_number)
 
-        simulations = 1000
-        for _ in range(simulations):
+        self.simulations = SIMULATIONS
+        for _ in range(self.simulations):
             node, state_copy = self.select_node(root)
             reward = self.rollout(state_copy)
             self.backpropagate(node, reward)
@@ -286,7 +308,7 @@ class AIPlayer:
         state_copy = np.copy(state)
         current_player = self.player_number
         opponent_number = 2 if self.player_number == 1 else 1
-        for _ in range(6):  # Limit the rollout depth
+        for _ in range(self.rollout_depth):  # Limit the rollout depth
             valid_moves = get_valid_actions(state_copy)
             if not valid_moves:
                 break
@@ -327,7 +349,6 @@ class AIPlayer:
         blocks_virtual = False
         if is_expansion:
             # Making virtual Connections: ___________________________________________________________
-            biased_moves = set()
             temp_player_dsu = self.dsus.player_dsu.copy()
             temp_opponent_dsu = self.dsus.opponent_dsu.copy()
             prev_player_sets = temp_player_dsu.get_sets()
@@ -337,53 +358,70 @@ class AIPlayer:
             new_player_sets = temp_player_dsu.get_sets()
             new_opponent_sets = temp_opponent_dsu.get_sets()
             if len(prev_player_sets) >= len(new_player_sets) and flag_for_virtual:
-                heuristic_value += 10
+                heuristic_value += 20
                 is_virtual = True
             if len(prev_opponent_sets) < len(new_opponent_sets):
-                heuristic_value += 10
+                heuristic_value += 14
                 blocks_virtual = True
 
             # Pursuing depth 1 virtual connections:_____________________________________________________
-            for index in new_player_sets:
-                corner_count = 0
-                anchor_points = set()
-                for node in new_player_sets[index]:
-                    # print("node haiss: ", node)
-                    if node in self.corners:
-                        corner_count += 1
-                        anchor_points.add(node)
-                if corner_count >= 2:
-                    heuristic_value += 100
-                    print("Supreme W by corners....")
-                    for node in anchor_points:
-                        for n in get_neighbours(self.dimension, node):
-                            if state[n[0], n[1]] == 0:
-                                biased_moves.add(n)
-                    break
+            if not self.target_locked:
+                for index in new_player_sets:
+                    corner_count = 0
+                    anchor_points = set()
+                    for node in new_player_sets[index]:
+                        # print("node haiss: ", node)
+                        if node in self.corners:
+                            corner_count += 1
+                            anchor_points.add(node)
+                    if corner_count >= 2:
+                        self.target_locked = True
+                        heuristic_value += 1500
+                        print("Supreme W by corners....")
+                        print("anchor_points: ", anchor_points)
+                        for node in new_player_sets[index]:
+                            for n in get_neighbours(self.dimension, node):
+                                if state[n[0], n[1]] != 1:
+                                    print("added biased point, ", n)
+                                    self.biased_moves.append(n)
+                        break
             #check frame for edges:
-            for index in new_player_sets: 
-                edge_count = 0
-                seen_edges = set()
-                anchor_points = set()
-                for node in new_player_sets[index]:
-                    # print("node hai: ", node)
-                    node_edge = get_edge(node, self.dimension)
-                    if node in self.edges and node_edge not in seen_edges:
-                        edge_count += 1
-                        anchor_points.add(node)
-                        seen_edges.add(node_edge)
-                if edge_count >= 3:
-                    heuristic_value += 100
-                    print("Supreme W by edges....")
-                    for node in anchor_points: 
-                        for n in get_neighbours(self.dimension, node):
-                            if state[n[0], n[1]] == 0:
-                                biased_moves.add(n)
-                    break
-
-            if move in biased_moves:
-                print("Pursued Biased moves....")
-                heuristic_value += 10000
+                for index in new_player_sets: 
+                    edge_count = 0
+                    seen_edges = set()
+                    anchor_points = set()
+                    for node in new_player_sets[index]:
+                        # print("node hai: ", node)
+                        node_edge = get_edge(node, self.dimension)
+                        if node in self.edges and node_edge not in seen_edges:
+                            edge_count += 1
+                            anchor_points.add(node)
+                            seen_edges.add(node_edge)
+                    if edge_count >= 3:
+                        self.target_locked = True
+                        heuristic_value += 1500
+                        print("Supreme W by edges....")
+                        print("anchor_points: ", anchor_points)
+                        for node in new_player_sets[index]: 
+                            for n in get_neighbours(self.dimension, node):
+                                if state[n[0], n[1]] != 3:
+                                    self.biased_moves.append(n)
+                        break
+            
+            # print("biased moves are: ", self.biased_moves)
+            # print("move is : ", move)
+            move_counts = {}
+            if move in self.biased_moves:
+                heuristic_value += 200
+            
+            for b in self.biased_moves:
+                if b in move_counts:
+                    move_counts[b] += 1
+                else:
+                    move_counts[b] = 1
+            for b, count in move_counts.items():
+                if count >= 2 and move == b:
+                    heuristic_value += 500
             
             # Preventing depth 1 virtual connections:_____________________________________________________
             temp_state = np.copy(state)
@@ -400,9 +438,9 @@ class AIPlayer:
                     if node in self.corners:
                         corner_count += 1
                 if corner_count >= 2:
-                    heuristic_value += 100
+                    heuristic_value += 1000
                     print("Preventing W by corners....")
-                break
+                    break
             #check frame for edges:
             for index in new_opponent_sets:
                 edge_count = 0
@@ -413,23 +451,23 @@ class AIPlayer:
                         edge_count += 1
                         seen_edges.add(node_edge)
                 if edge_count >= 3:
-                    heuristic_value += 100
+                    heuristic_value += 1000
                     print("Preventing W by edges....")
-                break
+                    break
 
         
         #Biasing towards the corner: 
-        heuristic_value -= 2*(self.bias_vector[move[0]][move[1]])
-        dim = (state.shape[0] + 1) // 2
+        if self.dimension > 7: 
+            heuristic_value -= 2*(self.bias_vector[move[0]][move[1]])
 
         if move in self.edges:
             heuristic_value += 2
         if move in self.corners: 
-            heuristic_value += 2
+            heuristic_value += 5
 
         # Heuristic 3: Group Size (approximate)
         # Bonus for connecting to own stones
-        neighbors = get_neighbours(dim, move)
+        neighbors = get_neighbours(self.dimension, move)
         own_neighbors = [n for n in neighbors if state[n[0], n[1]] == player_number]
         heuristic_value += len(own_neighbors)  # Bonus for each own neighbor
         return heuristic_value
