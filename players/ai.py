@@ -339,7 +339,21 @@ class AIPlayer:
                 # node.value += reward
             node = node.parent
 
-
+    def maintain_virtual_connections(self, move, dim, player, given_state) -> int:
+        neighbours = get_neighbours(dim, move)
+        count = 0
+        for neighbour in neighbours:
+            if given_state[neighbour[0], neighbour[1]] == player or given_state[neighbour[0], neighbour[1]] == 0:
+                continue
+            else:
+                useful = set()
+                neighbours_of_neighbour = get_neighbours(dim, neighbour)
+                for n in neighbours_of_neighbour:
+                    if n in neighbours and given_state[n[0], n[1]] == player:
+                        useful.add(n)
+                if len(useful) == 2:
+                    count += 1
+        return count
 #___________________________________________________________________________________________
     def evaluate_move_heuristic(self, state, move, player_number, is_expansion=False):
         heuristic_value = 0
@@ -361,6 +375,9 @@ class AIPlayer:
             if len(prev_opponent_sets) < len(new_opponent_sets):
                 heuristic_value += 5
                 blocks_virtual = True
+            if self.maintain_virtual_connections(move, self.dimension, self.player_number, state) > 0:
+                print("Saved virtual connection")
+                heuristic_value += 1000
 
             # Pursuing depth 1 virtual connections:_____________________________________________________
             if not self.target_locked:
@@ -436,7 +453,7 @@ class AIPlayer:
                     if node in self.corners:
                         corner_count += 1
                 if corner_count >= 2:
-                    heuristic_value += 5000
+                    heuristic_value += 500
                     print("Preventing W by corners....")
                     break
             #check frame for edges:
@@ -449,7 +466,7 @@ class AIPlayer:
                         edge_count += 1
                         seen_edges.add(node_edge)
                 if edge_count >= 3:
-                    heuristic_value += 5000
+                    heuristic_value += 500
                     print("Preventing W by edges....")
                     break
             #Biasing towards the corner: 
