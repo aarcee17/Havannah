@@ -1,243 +1,473 @@
-           
-
-#########
-
 import random
 import numpy as np
 from typing import Tuple
-from helper import get_valid_actions, check_win, check_ring, get_edge
 from helper import *
+import copy
+
+C = 0.01
+
+class DSU:
+    def _init_(self):
+        self.parent = {}
+        self.rank = {}
+        self.dimension = 0
+
+    def find(self, node):
+        if node not in self.parent:
+            self.parent[node] = node
+            self.rank[node] = 0
+        if self.parent[node] != node:
+            self.parent[node] = self.find(self.parent[node])
+        return self.parent[node]
+
+    def union(self, node1, node2):
+        root1 = self.find(node1)
+        root2 = self.find(node2)
+        if root1 != root2:
+            if self.rank[root1] > self.rank[root2]:
+                self.parent[root2] = root1
+            elif self.rank[root1] < self.rank[root2]:
+                self.parent[root1] = root2
+            else:
+                self.parent[root2] = root1
+                self.rank[root1] += 1
+
+    def connected(self, node1, node2):
+        if node1 not in self.parent or node2 not in self.parent:
+            return False
+        return self.find(node1) == self.find(node2)
+
+    def get_sets(self):
+        from collections import defaultdict
+        sets = defaultdict(set)
+        for node in self.parent:
+            root = self.find(node)
+            sets[root].add(node)
+        return dict(sets)
+
+
+    def check_v_pairs(self, v_new, v_pair, v_n1, v_n2, state):
+        # print("checking v pairs: ", v_new, v_pair, v_n1, v_n2)
+        if state[v_new] == state[v_pair] and state[v_n1] == 0 and state[v_n2] == 0:
+            return True
+        return False 
+
+    def insert_node(self, v_new, map_v_pairs, state):
+        # print("inserting node: ", v_new)
+        self.find(v_new)
+        flag_for_virtual_cc = False
+        for v in map_v_pairs.get(v_new, []):
+            v2 = v[0]
+            if self.check_v_pairs(v_new, v[0], v[1], v[2], state):
+                self.union(v_new, v2)
+                flag_for_virtual_cc = True
+        for v in get_neighbours(self.dimension, v_new):
+            if state[v[0], v[1]] == state[v_new[0], v_new[1]]:
+                self.union(v, v_new)
+        return flag_for_virtual_cc
+
+    def re_evaluate(self, u, v, state, map_v_pairs):
+        # print("re-evaluating: ", u, v)
+        sets = self.get_sets()
+        component = sets[self.find(u)]
+        for node in component:
+            self.parent[node] = node
+            self.rank[node] = 0 
+        for node in component:
+            self.insert_node(node, map_v_pairs, state)
+
+        
+    def recheck_nodes(self, move, inverse_map_v_pair, map_v_pairs, state): 
+        # print("rechecking nodes: ", move)
+        for (u,v) in inverse_map_v_pair.get(move, []):
+            if self.connected(u, v):
+                print("connected: ", u, v)
+                self.re_evaluate(u, v, state, map_v_pairs)
+
+    def copy(self):
+        new_dsu = DSU()
+        new_dsu.parent = copy.deepcopy(self.parent)
+        new_dsu.rank = copy.deepcopy(self.rank)
+        new_dsu.dimension = self.dimension  # Assuming dimension is an integer
+        return new_dsu
+
+class dsus:
+    def _init_(self):
+        self.player_dsu = DSU()
+        self.opponent_dsu = DSU()
 
 class AIPlayer:
-    
-    def __init__(self, player_number: int, timer, max_depth: int = 3):
-        """
-        Initialize the AIPlayer Agent.
-        
-        Parameters:
-        - player_number (int): Current player number (1 or 2)
-        - timer: A Timer object to fetch remaining time (currently unused)
-        - max_depth (int): Maximum depth for Minimax with IDS
-        """
+    global C
+    def _init_(self, player_number: int, timer, max_depth: int = 3, heuristic_weight=0.5):
         self.player_number = player_number
+        self.opponent_number = 2 if player_number == 1 else 1
         self.type = 'ai2'
         self.player_string = f'Player {player_number}: ai2'
         self.timer = timer
         self.max_depth = max_depth
+        self.heuristic_weight = heuristic_weight
+        self.first_run = True
+        self.map_v_pairs = {}
+        self.inverse_map_v_pairs = {}
+        self.virtual_cc = set(set())
+        self.dsus = dsus()
+        self.dimension = 0
+        self.last_state = None
+        self.last_opp_move = None
+        self.edges = {}
+        self.corners = set()
 
     def get_move(self, state: np.array) -> Tuple[int, int]:
-        """
-        Given the current state of the board, return the next move.
-        
-        Parameters:
-        - state: np.array
-            A numpy array representing the board state.
+        if self.first_run: 
+            self.corners = set(get_all_corners(len(state)))
+            sides = get_all_edges(len(state))
+            for i, side in enumerate(sides):
+                for coord in side:
+                    self.edges[coord] = i + 1
+            self.dimension = len(state)
+            self.dsus.player_dsu.dimension = self.dimension
+            self.dsus.opponent_dsu.dimension = self.dimension
+            for r in range(len(state)):
+                for c in range(len(state)):
+                    if state[r,c] != 3:
+                        n = self.get_v_pairs(state, (r,c))
+                        self.map_v_pairs[(r,c)] = n
+                        for v in n: 
+                            if (v[0][0] > r or (v[0][0] == r and v[0][1] > c)):
+                                if v[1] not in self.inverse_map_v_pairs:
+                                    self.inverse_map_v_pairs[v[1]] = []
+                                if v[2] not in self.inverse_map_v_pairs:
+                                    self.inverse_map_v_pairs[v[2]] = []
+                                self.inverse_map_v_pairs[v[1]].append(((r,c),v[0]))
+                                self.inverse_map_v_pairs[v[2]].append(((r,c),v[0]))
+            self.first_run = False
 
-        Returns:
-        - Tuple[int, int]: Coordinates of the board cell where the move will be placed.
-        """
+        if self.last_state is not None:
+            for r in range(len(state)):
+                for c in range(len(state[r])):
+                    if self.last_state[r, c] != state[r, c] and state[r, c] == self.opponent_number:
+                        self.last_opp_move = (r, c)
+                        self.dsus.opponent_dsu.insert_node((r, c), self.map_v_pairs, state)
+                        self.dsus.player_dsu.recheck_nodes((r, c), self.inverse_map_v_pairs, self.map_v_pairs, state)
+                        break
+    
+        def returning_chores(move, state):
+            self.last_state = state.copy()
+            temp_state = np.copy(state)
+            temp_state[move[0], move[1]] = self.player_number
+            self.dsus.player_dsu.insert_node(move, self.map_v_pairs, temp_state)
+            self.dsus.opponent_dsu.recheck_nodes(move, self.inverse_map_v_pairs, self.map_v_pairs, temp_state)
+
+        print("dsu_player is: ", self.dsus.player_dsu.get_sets())
+        print("dsu_opponent is: ", self.dsus.opponent_dsu.get_sets())
         valid_moves = get_valid_actions(state)
-
-        # 1. Check if AI can win with this move
         for move in valid_moves:
             temp_state = np.copy(state)
             temp_state[move[0], move[1]] = self.player_number
-
             if check_win(temp_state, move, self.player_number)[0]:
-                print(f"AI winning move: {move}")
-                return move
+                print(f"AI selects winning move: {move}")
+                returning_chores(move, state)
+                return (int(move[0]),int(move[1]))
 
-        # 2. Check if opponent can win with the next move and block it
+        # Check if opponent can win with the next move and block it
         opponent_number = 2 if self.player_number == 1 else 1
         for move in valid_moves:
             temp_state = np.copy(state)
             temp_state[move[0], move[1]] = opponent_number
-
             if check_win(temp_state, move, opponent_number)[0]:
-                print(f"Blocking opponent's move: {move}")
-                return move
-        
+                print(f"AI blocks opponent's winning move: {move}")
+                returning_chores(move, state)
+                return (int(move[0]),int(move[1]))
+
+        # Look for 3-move combinations to block or win
+        # combo_move = self.lookahead_checkmate(state, valid_moves)
+        # if combo_move:
+        #     print(f"AI selects strategic move: {combo_move}")
+        #     returning_chores(combo_move, state)
+        #     return combo_move
+
         current_turn = np.count_nonzero(state)
-
-        # 3. No immediate win or block, use Minimax with IDS
-        return self.minimax_ids(state, valid_moves, current_turn)
-
-    def minimax_ids(self, state: np.array, valid_moves: list, current_turn: int) -> Tuple[int, int]:
-        """
-        Use Minimax with Iterative Deepening Search to find the best move.
-        
-        Parameters:
-        - state: np.array
-            Current state of the board.
-        - valid_moves: list of valid moves.
-
-        Returns:
-        - Tuple[int, int]: Best move based on Minimax with IDS.
-        """
-        best_move = None
-        best_score = float('-inf')
-
-        # Perform Iterative Deepening Search
-        for depth in range(1, self.max_depth + 1):
-            for move in valid_moves:
-                temp_state = np.copy(state)
-                temp_state[move[0], move[1]] = self.player_number
-                score = self.minimax(temp_state, depth, float('-inf'), float('inf'), False, current_turn)
-
-                if score > best_score:
-                    best_score = score
-                    best_move = move
-
-        # If no best move is found, fall back to a random valid move
-        return best_move or random.choice(valid_moves)
-
-    def minimax(self, state: np.array, depth: int, alpha: float, beta: float, maximizing_player: bool, current_turn: int) -> float:
-        if depth == 0:  # Stop the recursion when the depth limit is reached
-            return self.evaluate(state, current_turn)
-        
-        valid_moves = get_valid_actions(state)
-        
-        if maximizing_player:
-            max_eval = float('-inf')
-            for move in valid_moves:
-                temp_state = np.copy(state)
-                temp_state[move[0], move[1]] = self.player_number
-                eval = self.minimax(temp_state, depth - 1, alpha, beta, False, current_turn + 1)
-                max_eval = max(max_eval, eval)
-                alpha = max(alpha, eval)
-                if beta <= alpha:
-                    break
-            return max_eval
+        mcts_move = self.mcts_rave(state, valid_moves, current_turn)
+        if mcts_move in valid_moves:
+            print(f"AI selects MCTS move: {mcts_move}")
+            returning_chores(mcts_move, state)
+            return (int(mcts_move[0]),int(mcts_move[1]))
         else:
-            min_eval = float('inf')
-            opponent_number = 2 if self.player_number == 1 else 1
+            # As a safety net, return a random valid move
+            safe_move = random.choice(valid_moves)
+            print(f"AI selects fallback move: {safe_move}")
+            returning_chores(safe_move, state)
+            return (int(safe_move[0]),int(safe_move[1]))
+
+    def lookahead_checkmate(self, state: np.array, valid_moves: list) -> Tuple[int, int]:
+        opponent_number = 2 if self.player_number == 1 else 1
+
+        for first_move in valid_moves:
+            temp_state_1 = np.copy(state)
+            temp_state_1[first_move[0], first_move[1]] = self.player_number
+
+            if check_win(temp_state_1, first_move, self.player_number)[0]:
+                return first_move
+
+            opponent_moves = get_valid_actions(temp_state_1)
+            for second_move in opponent_moves:
+                temp_state_2 = np.copy(temp_state_1)
+                temp_state_2[second_move[0], second_move[1]] = opponent_number
+
+                if check_win(temp_state_2, second_move, opponent_number)[0]:
+                    continue  # Opponent can win; this path is not favorable
+
+                third_moves = get_valid_actions(temp_state_2)
+                for third_move in third_moves:
+                    temp_state_3 = np.copy(temp_state_2)
+                    temp_state_3[third_move[0], third_move[1]] = self.player_number
+
+                    if check_win(temp_state_3, third_move, self.player_number)[0]:
+                        return first_move
+
+        return None
+
+    def mcts_rave(self, state: np.array, valid_moves: list, current_turn: int) -> Tuple[int, int]:
+        root = self.MCTSNode(state, None, player=self.player_number)
+        if not root.children:
+            self.expand_node(root, self.player_number)
+        
+        simulations = 500
+        for _ in range(simulations):
+            node, state_copy = self.select_node(root)
+            reward = self.rollout(state_copy)
+            self.backpropagate(node, reward)
+
+        if root.children:
+            # Select the move with the highest visit count
+            best_child = max(root.children, key=lambda x: x.visits)
+            # root.print_mcts_tree(root)
+            return best_child.move
+
+        # If no children (should not happen), return a random valid move
+        return random.choice(valid_moves)
+
+    def select_node(self, node): 
+        state_copy = np.copy(node.state)
+        while node.children:
+            node = self.ucb_select(node)
+            # Apply the move to the state copy
+            if node.move is not None:
+                state_copy[node.move[0], node.move[1]] = node.player
+        return node, state_copy
+
+    def expand_node(self, node, player_number):
+        valid_moves = get_valid_actions(node.state)
+        opponent_number = 2 if player_number == 1 else 1
+        for move in valid_moves:
+            temp_state = np.copy(node.state)
+            temp_state[move[0], move[1]] = player_number
+            heuristic_value = self.evaluate_move_heuristic(temp_state, move, player_number, True)
+            child_node = self.MCTSNode(temp_state, move, parent=node, player=opponent_number, heuristic_value=heuristic_value)
+            node.children.append(child_node)
+
+    def ucb_select(self, node):
+        total_visits = sum(child.visits for child in node.children) + 1
+        ucb_values = []
+        for child in node.children:
+            exploitation = (child.value / (child.visits + 1e-5))
+            exploration = C * np.sqrt(np.log(total_visits) / (child.visits + 1e-5))
+            heuristic_bias = (child.heuristic_value * self.heuristic_weight) / (child.visits + 1)
+            ucb_value = exploitation + exploration + heuristic_bias
+            ucb_values.append(ucb_value)
+        max_index = np.argmax(ucb_values)
+        return node.children[max_index]
+
+    def rollout(self, state: np.array) -> float:
+        state_copy = np.copy(state)
+        current_player = self.player_number
+        opponent_number = 2 if self.player_number == 1 else 1
+        for _ in range(6):  # Limit the rollout depth
+            valid_moves = get_valid_actions(state_copy)
+            if not valid_moves:
+                break
+            moves_with_heuristics = []
             for move in valid_moves:
-                temp_state = np.copy(state)
-                temp_state[move[0], move[1]] = opponent_number
-                eval = self.minimax(temp_state, depth - 1, alpha, beta, True, current_turn + 1)
-                min_eval = min(min_eval, eval)
-                beta = min(beta, eval)
-                if beta <= alpha:
-                    break
-            return min_eval
+                temp_state = np.copy(state_copy)
+                temp_state[move[0], move[1]] = current_player
+                heuristic_value = self.evaluate_move_heuristic(temp_state, move, current_player)
+                moves_with_heuristics.append((move, heuristic_value))
 
-    def evaluate(self, state: np.array, current_turn: int) -> float:
-        """
-        Evaluation function based on proximity to winning conditions (bridges, rings), diamond head formation,
-        and multiple rollouts.
-        
-        Parameters:
-        - state: np.array
-            Current state of the board.
-        - current_turn: int
-            Current turn number in the game to account for ring rule depth.
-        
-        Returns:
-        - float: Evaluation score of the state.
-        """
-        score = 0
-        dim = state.shape[0]
-        player_num = self.player_number
-        
-        # Edge connection bonus (to encourage bridge formation)
-        for move in get_valid_actions(state, player_num):
-            if get_edge(move, dim) != -1:  # Moves close to the edges
-                score += 5  # Encourage edge connectivity for bridge potential
-        
-        # Ring formation (only score after 70% of the board is filled)
-        total_cells = dim * dim
-        filled_cells = np.count_nonzero(state)
-        ring_rule_threshold = 0.7 * total_cells
+            if moves_with_heuristics:
+                moves_with_heuristics.sort(key=lambda x: x[1], reverse=True)
+                top_moves = [m for m in moves_with_heuristics if m[1] == moves_with_heuristics[0][1]]
+                move = random.choice(top_moves)[0]
+            else:
+                move = random.choice(valid_moves)
+            state_copy[move[0], move[1]] = current_player
+            if check_win(state_copy, move, current_player)[0]:
+                return 1.0 if current_player == self.player_number else 0.0
+            current_player = opponent_number if current_player == self.player_number else self.player_number
+        return 0.5
 
-        if filled_cells >= ring_rule_threshold:
-            for move in get_valid_actions(state, player_num):
-                temp_state = np.copy(state)
-                temp_state[move[0], move[1]] = player_num
-                if check_ring(temp_state, move):  # If forming a ring
-                    score += 20  # High reward for forming or nearing a ring
+    def backpropagate(self, node, reward: float):
+        while node is not None:
+            node.visits += 1
+            if node.player == self.player_number:
+                node.value += reward
+            else:
+                node.value += (1 - reward)
+                # node.value += reward
+            node = node.parent
 
-        # Encourage moves that contribute to forming permanent stones in a ring (3 permanent stones)
-        if filled_cells >= ring_rule_threshold:
-            for move in get_valid_actions(state, player_num):
-                temp_state = np.copy(state)
-                temp_state[move[0], move[1]] = player_num
-                if check_ring(temp_state, move):
-                    score += 10  # Extra bonus for permanent stones
-        
-        # Diamond head strategy
-        for move in get_valid_actions(state, player_num):
-            if self.forms_diamond_head(state, move, player_num):
-                score += 5  # Bonus for forming diamond heads (strategically strong positions)
 
-        return score
+#___________________________________________________________________________________________
+    def evaluate_move_heuristic(self, state, move, player_number, is_expansion=False):
+        heuristic_value = 0
+        is_virtual = False
+        blocks_virtual = False
+        if is_expansion:
+            biased_moves = set()
+            temp_player_dsu = self.dsus.player_dsu.copy()
+            temp_opponent_dsu = self.dsus.opponent_dsu.copy()
+            prev_player_sets = temp_player_dsu.get_sets()
+            prev_opponent_sets = temp_opponent_dsu.get_sets()
+            flag_for_virtual = temp_player_dsu.insert_node(move, self.map_v_pairs, state)
+            temp_opponent_dsu.recheck_nodes(move, self.inverse_map_v_pairs, self.map_v_pairs, state)
+            new_player_sets = temp_player_dsu.get_sets()
+            new_opponent_sets = temp_opponent_dsu.get_sets()
+            if len(prev_player_sets) >= len(new_player_sets) and flag_for_virtual:
+                heuristic_value += 10
+                is_virtual = True
+            if len(prev_opponent_sets) < len(new_opponent_sets):
+                heuristic_value += 20
+                blocks_virtual = True
 
-    def are_connected(self, state: np.array, cell1: Tuple[int, int], cell2: Tuple[int, int]) -> bool:
-        """
-        Check if two cells are connected on the board for a specific player using BFS.
-        
-        Parameters:
-        - state: np.array
-            Current state of the board.
-        - cell1: Tuple[int, int]
-            Coordinates of the first cell.
-        - cell2: Tuple[int, int]
-            Coordinates of the second cell.
-        
-        Returns:
-        - bool: True if the two cells are connected, False otherwise.
-        """
-        dim = state.shape[0]
-        player_num = state[cell1[0], cell1[1]]
+            # check frame for corners: 
+            for index in new_player_sets:
+                corner_count = 0
+                for node in new_player_sets[index]:
+                    # print("node haiss: ", node)
+                    if node in self.corners:
+                        corner_count += 1
+                if corner_count >= 2:
+                    heuristic_value += 100
+                    print("Supreme W by corners....")
+                    for node in new_player_sets[index]:
+                        biased_moves.add(node)
+                break
+            #check frame for edges:
+            # print("new player sets: ", new_player_sets)
+            for index in new_player_sets: 
+                edge_count = 0
+                seen_edges = set()
+                for node in new_player_sets[index]:
+                    # print("node hai: ", node)
+                    node_edge = get_edge(node, self.dimension)
+                    if node in self.edges and node_edge not in seen_edges:
+                        edge_count += 1
+                        seen_edges.add(node_edge)
+                if edge_count >= 3:
+                    heuristic_value += 100
+                    print("Supreme W by edges....")
+                    for node in new_player_sets[index]:
+                        biased_moves.add(node)
+                break
 
-        # Return False if either of the cells is not occupied by the same player
-        if state[cell2[0], cell2[1]] != player_num:
-            return False
+            if move in biased_moves:
+                heuristic_value += 10000
+                
 
-        # Use BFS to check connection between cell1 and cell2
-        visited = set()
-        queue = [cell1]
+        dim = (state.shape[0] + 1) // 2
+        if move in self.edges:
+            heuristic_value += 2
+        if move in self.corners: 
+            heuristic_value += 2
 
-        while queue:
-            current = queue.pop(0)
-            
-            # If we reach cell2, they are connected
-            if current == cell2:
-                return True
-            
-            visited.add(current)
-
-            # Check all neighboring cells
-            for neighbor in get_neighbours(dim, current):
-                if neighbor not in visited and state[neighbor[0], neighbor[1]] == player_num:
-                    queue.append(neighbor)
-
-        # If BFS completes without finding a path, they are not connected
-        return False
-
-    def forms_diamond_head(self, state: np.array, move: Tuple[int, int], player_num: int) -> bool:
-        """
-        Check if a move creates a diamond head structure.
-        
-        Parameters:
-        - state: np.array
-            Current state of the board.
-        - move: Tuple[int, int]
-            Coordinates of the potential move.
-        - player_num: int
-            Player number (1 or 2).
-        
-        Returns:
-        - bool: True if the move forms a diamond head, False otherwise.
-        """
-        dim = state.shape[0]
+        # Heuristic 3: Group Size (approximate)
+        # Bonus for connecting to own stones
         neighbors = get_neighbours(dim, move)
-        
-        # Check if two opposite neighbors are unconnected but can be connected via this move
-        for i, neighbor1 in enumerate(neighbors):
-            for neighbor2 in neighbors[i+1:]:
-                if (state[neighbor1[0], neighbor1[1]] == player_num and
-                    state[neighbor2[0], neighbor2[1]] == player_num and
-                    not self.are_connected(state, neighbor1, neighbor2)):
-                    return True
+        own_neighbors = [n for n in neighbors if state[n[0], n[1]] == player_number]
+        heuristic_value += len(own_neighbors)  # Bonus for each own neighbor
 
-        return False
+
+
+        return heuristic_value
+
+    def is_corner(self, pos, dim):
+        corner = get_corner(pos, dim)
+        return corner != -1
+
+    def get_v_pairs(self, state, vertex):
+        i,j = vertex
+        siz = len(state)//2
+        dim = len(state)
+        neighbors = []
+        if j < siz-1:
+            neighbors.append(((i-2,j-1),(i-1,j),(i-1,j-1)))
+            neighbors.append(((i-1,j-2),(i-1,j-1),(i,j-1)))
+            neighbors.append(((i+1,j-1),(i,j-1),(i+1,j)))
+            neighbors.append(((i+2,j+1),(i+1,j),(i+1,j+1)))
+            neighbors.append(((i+1,j+2),(i+1,j+1),(i,j+1)))
+            neighbors.append(((i-1,j+1),(i,j+1),(i-1,j)))
+        elif j == siz-1: 
+            neighbors.append(((i-2,j-1), (i-1,j-1), (i-1,j)))
+            neighbors.append(((i-1,j-2),(i-1,j-1),(i,j-1)))
+            neighbors.append(((i+1,j-1),(i,j-1),(i+1,j)))
+            neighbors.append(((i+2,j+1),(i+1,j),(i+1,j+1)))
+            neighbors.append(((i,j+2),(i,j+1),(i+1,j+1)))
+            neighbors.append(((i-1,j+1),(i,j+1),(i-1,j)))
+        elif j == siz: 
+            neighbors.append(((i-2,j-1), (i-1,j-1), (i-1,j)))
+            neighbors.append(((i-1,j-2),(i-1,j-1),(i,j-1)))
+            neighbors.append(((i+1,j-1),(i,j-1),(i+1,j)))
+            neighbors.append(((i+1,j+1),(i+1,j),(i,j+1)))
+            neighbors.append(((i-1,j+2),(i-1,j+1),(i,j+1)))
+            neighbors.append(((i-2,j+1),(i-1,j),(i-1,j+1)))
+        elif j == siz+1:
+            neighbors.append(((i-1,j-1),(i,j-1),(i-1,j)))
+            neighbors.append(((i,j-2),(i,j-1),(i+1,j-1)))
+            neighbors.append(((i+2,j-1),(i+1,j),(i+1,j-1)))
+            neighbors.append(((i+1,j+1),(i+1,j),(i,j+1)))
+            neighbors.append(((i-1,j+2),(i-1,j+1),(i,j+1)))
+            neighbors.append(((i-2,j+1),(i-1,j),(i-1,j+1)))
+        else:
+            neighbors.append(((i-1,j-1),(i,j-1),(i-1,j)))
+            neighbors.append(((i+1,j-2),(i+1,j-1),(i,j-1)))
+            neighbors.append(((i+2,j-1),(i+1,j),(i+1,j-1)))
+            neighbors.append(((i+1,j+1),(i+1,j),(i,j+1)))
+            neighbors.append(((i-1,j+2),(i-1,j+1),(i,j+1)))
+            neighbors.append(((i-2,j+1),(i-1,j),(i-1,j+1)))
+        
+        valid_neighbors = [] 
+        for n in neighbors: 
+            (r,c) = n[0]
+            if r < 0 or r > dim-1 or c < 0 or c > dim-1:
+                continue
+            if state[r,c] == 3:
+                continue
+            valid_neighbors.append(n)
+        return valid_neighbors
+
+    class MCTSNode:
+        def _init_(self, state, move, parent=None, player=1, heuristic_value=0):
+            self.state = state
+            self.move = move
+            self.parent = parent
+            self.children = []
+            self.visits = 0
+            self.value = 0.0
+            self.player = player
+            self.heuristic_value = heuristic_value
+
+        def print_mcts_tree(self, node, depth=0):
+            indent = '  ' * depth
+            print(f"{indent}Node at depth {depth}:")
+            print(f"{indent}  Move: {node.move}")
+            print(f"{indent}  Player: {node.player}")
+            print(f"{indent}  Visits: {node.visits}")
+            print(f"{indent}  Value: {node.value}")
+            print(f"{indent}  Heuristic Value: {node.heuristic_value}")
+            print(f"{indent}  Children count: {len(node.children)}")
+            
+            # Print the state's array representation (optional, for large states this could be omitted)
+            print(f"{indent}  State: \n{node.state}")
+            
+            # Recursively print all children
+            for child in node.children:
+                self.print_mcts_tree(child, depth + 1)

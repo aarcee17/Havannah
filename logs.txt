@@ -1,33 +1,31 @@
-4
-0 0 0 0 0 0 0 
-0 0 0 0 0 0 0 
-0 0 0 0 0 0 0 
-0 0 0 0 0 0 0 
-3 0 0 0 0 0 3 
-3 3 0 0 0 3 3 
-3 3 3 0 3 3 3 
+6
+0 0 0 0 0 0 0 0 0 0 0 
+0 0 0 0 0 0 0 0 0 0 0 
+0 0 0 0 0 0 0 0 0 0 0 
+0 0 0 0 0 0 0 0 0 0 0 
+0 0 0 0 0 0 0 0 0 0 0 
+0 0 0 0 0 0 0 0 0 0 0 
+3 0 0 0 0 0 0 0 0 0 3 
+3 3 0 0 0 0 0 0 0 3 3 
+3 3 3 0 0 0 0 0 3 3 3 
+3 3 3 3 0 0 0 3 3 3 3 
+3 3 3 3 3 0 3 3 3 3 3 
 Player 1 Type: ai2
 Player 2 Type: human
 {"player": 1, "move": [0, 0]}
-{"player": 2, "move": [6, 3]}
+{"player": 2, "move": [10, 5]}
+{"player": 1, "move": [1, 2]}
+{"player": 2, "move": [0, 4]}
+{"player": 1, "move": [0, 3]}
+{"player": 2, "move": [1, 4]}
 {"player": 1, "move": [2, 1]}
-{"player": 2, "move": [3, 0]}
-{"player": 1, "move": [4, 2]}
-{"player": 2, "move": [5, 2]}
-{"player": 1, "move": [4, 1]}
-{"player": 2, "move": [5, 4]}
-{"player": 1, "move": [4, 4]}
-{"player": 2, "move": [0, 3]}
-{"player": 1, "move": [3, 6]}
-{"player": 2, "move": [3, 5]}
-{"player": 1, "move": [4, 5]}
-{"player": 2, "move": [3, 1]}
-{"player": 1, "move": [4, 3]}
-{"player": 2, "move": [3, 2]}
-{"player": 1, "move": [2, 6]}
-Game Over
-Winner: Player 1
-Structure Formed: fork
-Winning Path: [(2, 6), (4, 5), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (3, 6)]
-Player 1 Time Remaining: 549.9176025390625 s
-Player 2 Time Remaining: 580.0742797851562 s
+{"player": 2, "move": [9, 6]}
+{"player": 1, "move": [3, 0]}
+{"player": 2, "move": [9, 5]}
+{"player": 1, "move": [5, 1]}
+{"player": 2, "move": [9, 4]}
+{"player": 1, "move": [5, 0]}
+{"player": 2, "move": [8, 7]}
+{"player": 1, "move": [7, 2]}
+{"player": 2, "move": [8, 6]}
+{"player": 1, "move": [2, 4]}
