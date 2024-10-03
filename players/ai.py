@@ -377,7 +377,7 @@ class AIPlayer:
                 blocks_virtual = True
             if self.maintain_virtual_connections(move, self.dimension, self.player_number, state) > 0:
                 print("Saved virtual connection")
-                heuristic_value += 1000
+                heuristic_value += 4000 if self.dimension == 7 else 500
 
             # Pursuing depth 1 virtual connections:_____________________________________________________
             if not self.target_locked:
@@ -391,7 +391,7 @@ class AIPlayer:
                             anchor_points.add(node)
                     if corner_count >= 2:
                         self.target_locked = True
-                        heuristic_value += 10000
+                        heuristic_value += 7000 if self.dimension == 7 else 5000
                         print("Supreme W by corners....")
                         print("anchor_points: ", anchor_points)
                         for node in new_player_sets[index]:
@@ -414,7 +414,7 @@ class AIPlayer:
                             seen_edges.add(node_edge)
                     if edge_count >= 3:
                         self.target_locked = True
-                        heuristic_value += 10000
+                        heuristic_value += 7000 if self.dimension == 7 else 5000
                         print("Supreme W by edges....")
                         print("anchor_points: ", anchor_points)
                         for node in new_player_sets[index]: 
@@ -436,7 +436,7 @@ class AIPlayer:
                     move_counts[b] = 1
             for b, count in move_counts.items():
                 if count >= 2 and move == b:
-                    heuristic_value += 1000
+                    heuristic_value += 10000 if self.dimension == 7 else 1000
             
             # Preventing depth 1 virtual connections:_____________________________________________________
             temp_state = np.copy(state)
@@ -453,7 +453,7 @@ class AIPlayer:
                     if node in self.corners:
                         corner_count += 1
                 if corner_count >= 2:
-                    heuristic_value += 500
+                    heuristic_value += 15000 if self.dimension == 7 else 200
                     print("Preventing W by corners....")
                     break
             #check frame for edges:
@@ -466,7 +466,7 @@ class AIPlayer:
                         edge_count += 1
                         seen_edges.add(node_edge)
                 if edge_count >= 3:
-                    heuristic_value += 500
+                    heuristic_value += 15000 if self.dimension == 7 else 2000
                     print("Preventing W by edges....")
                     break
             #Biasing towards the corner: 
